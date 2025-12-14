@@ -1,0 +1,2 @@
+audio_device: "hw:1,0"
+default_file: "test.wav"
