@@ -21,3 +21,19 @@ dist/
 
 test.mp3
 test.wav
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS / éditeurs
+.DS_Store
+.vscode/
+.idea/
+
+# Tests audio générés / temporaires
+test.wav
+test.mp3
+*.log
