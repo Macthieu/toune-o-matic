@@ -1,15 +1,21 @@
-import numpy as np
-from scipy.io.wavfile import write
+import wave
+import struct
+import math
 
-samplerate = 44100  # 44.1 kHz
-duration = 2.0      # 2 secondes
-frequency = 440.0   # Tonalité A4 (La 440 Hz)
+sample_rate = 44100
+duration = 2  # secondes
+frequency = 440.0  # Hz (note LA)
 
-t = np.linspace(0., duration, int(samplerate * duration))
-amplitude = np.iinfo(np.int16).max
-data = amplitude * np.sin(2 * np.pi * frequency * t)
+filename = "test.wav"
 
-# Génère un son stéréo : 2 canaux identiques
-data_stereo = np.column_stack((data, data))
+with wave.open(filename, 'w') as wav_file:
+    wav_file.setnchannels(2)
+    wav_file.setsampwidth(2)
+    wav_file.setframerate(sample_rate)
 
-write("test.wav", samplerate, data_stereo.astype(np.int16))
+    for i in range(int(duration * sample_rate)):
+        value = int(32767.0 * math.sin(2.0 * math.pi * frequency * i / sample_rate))
+        data = struct.pack('<hh', value, value)  # stéréo
+        wav_file.writeframesraw(data)
+
+print(f"Fichier {filename} généré.")
