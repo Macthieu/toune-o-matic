@@ -1,39 +1,27 @@
-# .gitignore (dans ~/toune-o-matic)
+# Python
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
 *.pyd
-.env
-.venv
+*.log
+
+# Virtualenv
+.venv/
 venv/
 ENV/
 env/
+
+# Build / packaging
 build/
-develop-eggs/
 dist/
 *.egg-info/
 .eggs/
-*.log
+develop-eggs/
+
+# Editors / OS
 *.swp
 .DS_Store
-.idea/
-.vscode/
-
-test.mp3
-test.wav
-
-# Python
-__pycache__/
-*.pyc
-.venv/
-venv/
-
-# OS / éditeurs
-.DS_Store
 .vscode/
 .idea/
 
-# Tests audio générés / temporaires
-test.wav
-test.mp3
-*.log
+# Local generated audio tests
+audio/_local_test/
