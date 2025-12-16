@@ -25,3 +25,5 @@ develop-eggs/
 
 # Local generated audio tests
 audio/_local_test/
+
+config/settings.yaml
