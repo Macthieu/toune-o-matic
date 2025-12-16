@@ -52,3 +52,5 @@ config/settings.yaml
 # python junk (si pas déjà là)
 __pycache__/
 *.pyc
+# Local config (do not commit)
+config/settings.yaml
