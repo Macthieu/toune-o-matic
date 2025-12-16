@@ -27,3 +27,4 @@ develop-eggs/
 audio/_local_test/
 
 config/settings.yaml
+.state/
