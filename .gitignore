@@ -28,3 +28,27 @@ audio/_local_test/
 
 config/settings.yaml
 .state/
+
+# macOS / AppleDouble (SMB)
+.DS_Store
+._*
+.AppleDouble
+.LSOverride
+
+# backups
+*.bak
+*.bak.*
+*~
+
+# runtime state
+.state/
+
+# local test audio
+audio/_local_test/
+
+# local user settings (keep the example tracked)
+config/settings.yaml
+
+# python junk (si pas déjà là)
+__pycache__/
+*.pyc
