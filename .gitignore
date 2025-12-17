@@ -54,3 +54,17 @@ __pycache__/
 *.pyc
 # Local config (do not commit)
 config/settings.yaml
+
+# secrets / config locale
+settings.yaml
+
+# data / musique
+audio/
+
+# python
+venv/
+__pycache__/
+*.pyc
+
+# divers
+.DS_Store
