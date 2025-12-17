@@ -2,20 +2,42 @@
 from __future__ import annotations
 
 import os
-import yaml
 from functools import wraps
-from typing import Any, Dict, List, Callable, Optional, Tuple
+from typing import Any, Dict, List, Optional, Callable, Tuple
 
+import yaml
 from flask import Flask, request, jsonify
 from mpd import MPDClient, CommandError, ConnectionError as MPDConnectionError
 
 APP = Flask(__name__)
 
 # ----------------------------
-# Settings
+# Settings (robuste: env + chemins possibles)
 # ----------------------------
+DEFAULT_SETTINGS_CANDIDATES = [
+    "/home/pi/toune-o-matic/settings.yaml",
+    "/home/pi/toune-o-matic/config/settings.yaml",
+    "/home/pi/toune-o-matic/config/settings.local.yaml",
+]
+
+def _first_existing_path(paths: List[str]) -> Optional[str]:
+    for p in paths:
+        try:
+            if p and os.path.isfile(p):
+                return p
+        except Exception:
+            pass
+    return None
+
 def load_settings() -> Dict[str, Any]:
-    path = os.environ.get("TOUNE_SETTINGS", "/home/pi/toune-o-matic/settings.yaml")
+    env_path = os.environ.get("TOUNE_SETTINGS")
+    candidates = [env_path] if env_path else []
+    candidates += DEFAULT_SETTINGS_CANDIDATES
+
+    path = _first_existing_path([p for p in candidates if p])
+    if not path:
+        return {}
+
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
@@ -53,38 +75,30 @@ OUT_SNAP_NAME = str(get_setting("outputs", "snapcast_name", default="snapcast"))
 # ----------------------------
 # Helpers
 # ----------------------------
-def _as_int(v: Optional[str], default: int) -> int:
+def parse_int(v: Optional[str], default: int) -> int:
     try:
         return int(v)  # type: ignore[arg-type]
     except Exception:
         return default
 
-def _as_bool(v: Optional[str]) -> bool:
+def parse_bool(v: Optional[str]) -> bool:
     if v is None:
         return False
     return str(v).strip().lower() in ("1", "true", "yes", "y", "on")
 
-def _clamp(n: int, lo: int, hi: int) -> int:
+def clamp(n: int, lo: int, hi: int) -> int:
     return max(lo, min(hi, n))
-
-def paginate(items: List[Dict[str, Any]], limit: int, offset: int) -> Tuple[int, List[Dict[str, Any]]]:
-    total = len(items)
-    if limit <= 0:
-        return total, []
-    offset = max(0, offset)
-    return total, items[offset: offset + limit]
 
 def require_key(fn: Callable[..., Any]):
     @wraps(fn)
     def wrapper(*args, **kwargs):
-        # header prioritaire; fallback possible en query ?key=...
         provided = request.headers.get("X-API-Key") or request.args.get("key")
         if not provided or provided != API_KEY:
             return jsonify({"ok": False, "error": "unauthorized"}), 401
         return fn(*args, **kwargs)
     return wrapper
 
-def mpd_call(work: Callable[[MPDClient], Any]) -> Any:
+def with_mpd(work: Callable[[MPDClient], Any]):
     c = MPDClient()
     c.timeout = MPD_TIMEOUT
     c.idletimeout = MPD_TIMEOUT
@@ -101,23 +115,44 @@ def mpd_call(work: Callable[[MPDClient], Any]) -> Any:
         except Exception:
             pass
 
-def mpd_safe(work: Callable[[MPDClient], Any]) -> Tuple[bool, Any, int]:
-    try:
-        data = mpd_call(work)
-        return True, data, 200
-    except MPDConnectionError as e:
-        return False, {"ok": False, "error": f"mpd connection error: {e}"}, 503
-    except CommandError as e:
-        return False, {"ok": False, "error": f"mpd command error: {e}"}, 400
-    except Exception as e:
-        return False, {"ok": False, "error": str(e)}, 500
-
 def mpd_outputs(c: MPDClient) -> Dict[str, Dict[str, Any]]:
-    outs = {}
+    outs: Dict[str, Dict[str, Any]] = {}
     for o in c.outputs():
         name = o.get("outputname", "")
         outs[name] = o
     return outs
+
+def normalize_lsinfo(raw: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    MPD lsinfo retourne une liste d'objets hétérogènes:
+      - {"directory": "..."}
+      - {"file": "...", "Title": "...", "Artist": "...", "Album": "...", "Time": "..."}
+    On normalise en:
+      - {"type":"dir","path":"..."}
+      - {"type":"file","path":"...","title":...,"artist":...,"album":...,"duration":...}
+    """
+    items: List[Dict[str, Any]] = []
+
+    for it in raw or []:
+        if "directory" in it:
+            items.append({"type": "dir", "path": it.get("directory", "")})
+            continue
+
+        if "file" in it:
+            duration = it.get("Time") or it.get("time") or ""
+            items.append({
+                "type": "file",
+                "path": it.get("file", ""),
+                "title": it.get("Title") or it.get("title") or "",
+                "artist": it.get("Artist") or it.get("artist") or "",
+                "album": it.get("Album") or it.get("album") or "",
+                "duration": str(duration),
+            })
+            continue
+
+    # tri: dossiers d'abord, puis fichiers; tri alpha sur path
+    items.sort(key=lambda x: (0 if x.get("type") == "dir" else 1, x.get("path", "")))
+    return items
 
 # ----------------------------
 # Routes
@@ -129,14 +164,20 @@ def health():
 @APP.get("/api/status")
 @require_key
 def status():
-    ok, payload, code = mpd_safe(lambda c: {
-        "status": c.status() or {},
-        "song": c.currentsong() or {},
-        "outputs": mpd_outputs(c),
-    })
-    if ok:
-        return jsonify({"ok": True, **payload})
-    return jsonify(payload), code
+    def work(c: MPDClient):
+        return jsonify({
+            "ok": True,
+            "status": c.status() or {},
+            "song": c.currentsong() or {},
+            "outputs": mpd_outputs(c),
+        })
+
+    try:
+        return with_mpd(work)
+    except MPDConnectionError as e:
+        return jsonify({"ok": False, "error": f"mpd connection error: {e}"}), 503
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 @APP.post("/api/mode")
 @require_key
@@ -146,12 +187,13 @@ def mode():
     if m not in ("dac", "snap", "both"):
         return jsonify({"ok": False, "error": "mode must be dac|snap|both"}), 400
 
-    def _do(c: MPDClient):
+    def work(c: MPDClient):
         outs = mpd_outputs(c)
+
         if OUT_DAC_NAME not in outs:
-            raise RuntimeError(f"Output not found: {OUT_DAC_NAME}")
+            return jsonify({"ok": False, "error": f"Output not found: {OUT_DAC_NAME}"}), 400
         if OUT_SNAP_NAME not in outs:
-            raise RuntimeError(f"Output not found: {OUT_SNAP_NAME}")
+            return jsonify({"ok": False, "error": f"Output not found: {OUT_SNAP_NAME}"}), 400
 
         dac_id = int(outs[OUT_DAC_NAME]["outputid"])
         snap_id = int(outs[OUT_SNAP_NAME]["outputid"])
@@ -166,12 +208,12 @@ def mode():
             c.disableoutput(dac_id)
             c.enableoutput(snap_id)
 
-        return {"mode": m}
+        return jsonify({"ok": True, "mode": m})
 
-    ok, payload, code = mpd_safe(_do)
-    if ok:
-        return jsonify({"ok": True, **payload})
-    return jsonify(payload), code
+    try:
+        return with_mpd(work)
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 @APP.post("/api/cmd")
 @require_key
@@ -179,7 +221,7 @@ def cmd():
     body = request.get_json(silent=True) or {}
     action = str(body.get("action", "")).strip().lower()
 
-    def _do(c: MPDClient):
+    def work(c: MPDClient):
         if action == "play":
             c.play()
         elif action == "pause":
@@ -194,124 +236,115 @@ def cmd():
                 c.pause(1)
             else:
                 c.play()
-        elif action == "next":
+        elif action in ("next", "n"):
             c.next()
-        elif action == "prev":
+        elif action in ("prev", "previous", "p"):
             c.previous()
         else:
-            raise RuntimeError("action must be: play|pause|resume|stop|toggle|next|prev")
-        return {"action": action}
+            return jsonify({"ok": False, "error": "unknown action"}), 400
 
-    ok, payload, code = mpd_safe(_do)
-    if ok:
-        return jsonify({"ok": True, **payload})
-    return jsonify(payload), code
+        return jsonify({"ok": True, "action": action})
 
-@APP.get("/api/queue")
-@require_key
-def queue():
-    limit = _clamp(_as_int(request.args.get("limit"), 200), 1, 1000)
-    offset = max(0, _as_int(request.args.get("offset"), 0))
-
-    def _do(c: MPDClient):
-        items = c.playlistinfo() or []
-        total, page = paginate(items, limit, offset)
-        return {"total": total, "limit": limit, "offset": offset, "queue": page}
-
-    ok, payload, code = mpd_safe(_do)
-    if ok:
-        return jsonify({"ok": True, **payload})
-    return jsonify(payload), code
-
-@APP.post("/api/queue/clear")
-@require_key
-def queue_clear():
-    ok, payload, code = mpd_safe(lambda c: (c.clear() or True))
-    if ok:
-        return jsonify({"ok": True})
-    return jsonify(payload), code
-
-@APP.post("/api/queue/add")
-@require_key
-def queue_add():
-    body = request.get_json(silent=True) or {}
-    uri = body.get("uri")
-    play = bool(body.get("play", False))
-    if not uri or not isinstance(uri, str):
-        return jsonify({"ok": False, "error": "missing uri"}), 400
-
-    def _do(c: MPDClient):
-        # addid retourne un id (string) si supporté; sinon fallback sur add + last id
-        sid = None
-        try:
-            sid = c.addid(uri)
-        except Exception:
-            c.add(uri)
-        # si play demandé
-        if play:
-            if sid:
-                c.playid(sid)
-            else:
-                # fallback: joue la dernière position
-                st = c.status() or {}
-                plen = int(st.get("playlistlength", "0") or 0)
-                if plen > 0:
-                    c.play(plen - 1)
-        return {"uri": uri, "play": play, "id": sid}
-
-    ok, payload, code = mpd_safe(_do)
-    if ok:
-        return jsonify({"ok": True, **payload})
-    return jsonify(payload), code
+    try:
+        return with_mpd(work)
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 @APP.get("/api/browse")
 @require_key
 def browse():
-    path = request.args.get("path") or ""
-    dirs_only = _as_bool(request.args.get("dirs_only"))
-    files_only = _as_bool(request.args.get("files_only"))
+    path = request.args.get("path", "") or ""
+    limit = clamp(parse_int(request.args.get("limit"), 200), 1, 500)
+    offset = max(0, parse_int(request.args.get("offset"), 0))
+    dirs_only = parse_bool(request.args.get("dirs_only"))
+    files_only = parse_bool(request.args.get("files_only"))
 
-    limit = _clamp(_as_int(request.args.get("limit"), 200), 1, 1000)
-    offset = max(0, _as_int(request.args.get("offset"), 0))
+    def work(c: MPDClient):
+        raw = c.lsinfo(path)
+        items = normalize_lsinfo(raw)
 
-    if dirs_only and files_only:
-        return jsonify({"ok": False, "error": "dirs_only and files_only cannot both be true"}), 400
+        if dirs_only:
+            items = [x for x in items if x.get("type") == "dir"]
+        if files_only:
+            items = [x for x in items if x.get("type") == "file"]
 
-    def _do(c: MPDClient):
-        raw = c.lsinfo(path) or []
+        total = len(items)
+        page = items[offset:offset + limit]
 
-        items: List[Dict[str, Any]] = []
-        for it in raw:
-            if "directory" in it:
-                if files_only:
-                    continue
-                items.append({"type": "dir", "path": it["directory"]})
-            elif "file" in it:
-                if dirs_only:
-                    continue
-                items.append({
-                    "type": "file",
-                    "path": it["file"],
-                    "title": it.get("title"),
-                    "artist": it.get("artist"),
-                    "album": it.get("album"),
-                    "duration": it.get("duration"),
-                })
+        return jsonify({
+            "ok": True,
+            "path": path,
+            "limit": limit,
+            "offset": offset,
+            "total": total,
+            "items": page,
+        })
 
-        # tri : dirs d'abord puis files, alpha par path
-        items.sort(key=lambda x: (0 if x["type"] == "dir" else 1, str(x.get("path", "")).lower()))
+    try:
+        return with_mpd(work)
+    except CommandError as e:
+        return jsonify({"ok": False, "error": f"MPD CommandError: {e}"}), 400
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
-        total, page = paginate(items, limit, offset)
-        return {"path": path, "total": total, "limit": limit, "offset": offset, "items": page}
+@APP.get("/api/queue")
+@require_key
+def queue():
+    limit = clamp(parse_int(request.args.get("limit"), 200), 1, 500)
+    offset = max(0, parse_int(request.args.get("offset"), 0))
 
-    ok, payload, code = mpd_safe(_do)
-    if ok:
-        return jsonify({"ok": True, **payload})
-    return jsonify(payload), code
+    def work(c: MPDClient):
+        # MPD moderne supporte playlistinfo("start:end") => très efficace
+        try:
+            page = c.playlistinfo(f"{offset}:{offset + limit}")
+            st = c.status() or {}
+            total = int(st.get("playlistlength", "0"))
+            return jsonify({"ok": True, "limit": limit, "offset": offset, "total": total, "queue": page})
+        except Exception:
+            allq = c.playlistinfo()
+            total = len(allq)
+            page = allq[offset:offset + limit]
+            return jsonify({"ok": True, "limit": limit, "offset": offset, "total": total, "queue": page})
 
-# ----------------------------
-# Main
-# ----------------------------
+    try:
+        return with_mpd(work)
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@APP.post("/api/queue/clear")
+@require_key
+def queue_clear():
+    def work(c: MPDClient):
+        c.clear()
+        return jsonify({"ok": True})
+    try:
+        return with_mpd(work)
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@APP.post("/api/queue/add")
+@require_key
+def queue_add():
+    data = request.get_json(silent=True) or {}
+    uri = data.get("uri")
+    play = bool(data.get("play", False))
+    if not uri:
+        return jsonify({"ok": False, "error": "missing uri"}), 400
+
+    def work(c: MPDClient):
+        sid = c.addid(uri)
+        if play:
+            c.playid(sid)
+        return jsonify({"ok": True, "uri": uri, "play": play, "id": sid})
+
+    try:
+        return with_mpd(work)
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 if __name__ == "__main__":
-    # Flask dev server (OK pour ton Pi en LAN; plus tard on passera à gunicorn)
+    # Petit print utile (journalctl) pour diagnostiquer port/settings
+    print(f"[toune-api] settings loaded keys={list(SETTINGS.keys())}", flush=True)
+    print(f"[toune-api] listening on {LISTEN_HOST}:{LISTEN_PORT} (mpd {MPD_HOST}:{MPD_PORT})", flush=True)
     APP.run(host=LISTEN_HOST, port=LISTEN_PORT)
