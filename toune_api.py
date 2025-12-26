@@ -342,6 +342,48 @@ def queue_add():
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
+@APP.post("/api/queue/play")
+@require_key
+def queue_play():
+    data = request.get_json(silent=True) or {}
+    qid = data.get("id", None)
+    pos = data.get("pos", None)
+
+    def work(c: MPDClient):
+        if qid is not None:
+            c.playid(int(qid))
+            return jsonify({"ok": True, "played": {"id": int(qid)}})
+        if pos is not None:
+            c.play(int(pos))
+            return jsonify({"ok": True, "played": {"pos": int(pos)}})
+        return jsonify({"ok": False, "error": "missing id or pos"}), 400
+
+    try:
+        return with_mpd(work)
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@APP.post("/api/queue/remove")
+@require_key
+def queue_remove():
+    data = request.get_json(silent=True) or {}
+    qid = data.get("id", None)
+    pos = data.get("pos", None)
+
+    def work(c: MPDClient):
+        if qid is not None:
+            c.deleteid(int(qid))
+            return jsonify({"ok": True, "removed": {"id": int(qid)}})
+        if pos is not None:
+            c.delete(int(pos))
+            return jsonify({"ok": True, "removed": {"pos": int(pos)}})
+        return jsonify({"ok": False, "error": "missing id or pos"}), 400
+
+    try:
+        return with_mpd(work)
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 if __name__ == "__main__":
     # Petit print utile (journalctl) pour diagnostiquer port/settings
