@@ -1,0 +1,497 @@
+<!--sudo tee /var/www/toune-ui/index.html > /dev/null <<'EOF'
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>toune-o-matic</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:20px;max-width:1200px}
+    .row{display:flex;gap:12px;flex-wrap:wrap}
+    .card{border:1px solid #ddd;border-radius:14px;padding:16px;margin:12px 0;flex:1;min-width:340px}
+    h1{margin:0 0 6px 0}
+    small{color:#666}
+    button{padding:10px 14px;border-radius:10px;border:1px solid #ccc;background:#f7f7f7;cursor:pointer}
+    button.primary{background:#111;color:#fff;border-color:#111}
+    button.danger{background:#b00020;color:#fff;border-color:#b00020}
+    button.ghost{background:#fff}
+    input, select, textarea{padding:10px 12px;width:100%;border-radius:10px;border:1px solid #ccc}
+    textarea{min-height:110px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
+    pre{background:#111;color:#eee;padding:12px;border-radius:12px;overflow:auto;min-height:110px}
+    code{background:#f3f3f3;padding:2px 6px;border-radius:8px}
+    .btns{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;align-items:center}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
+    .list{border:1px solid #ddd;border-radius:12px;overflow:hidden;margin-top:10px}
+    .rowitem{display:flex;gap:10px;align-items:center;padding:10px 12px;border-top:1px solid #eee}
+    .rowitem:first-child{border-top:none}
+    .rowitem:hover{background:#fafafa}
+    .grow{flex:1}
+    .tag{font-size:12px;color:#666}
+    .icon{width:26px;text-align:center}
+    .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .kv{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    .pill{display:inline-flex;gap:6px;align-items:center;padding:4px 10px;border-radius:999px;border:1px solid #ddd;background:#fff;font-size:12px}
+    .dot{width:9px;height:9px;border-radius:50%;background:#bbb;display:inline-block}
+    .dot.on{background:#16a34a}
+    .dot.off{background:#bbb}
+    progress{width:100%;height:14px}
+  </style>
+</head>
+<body>
+  <h1>toune-o-matic</h1>
+  <small>UI (Nginx) • API sur <code>/api</code> → <code>127.0.0.1:11000</code></small>
+
+  <div class="card">
+    <h2>Clé API</h2>
+    <small>Requis pour <code>/api/status</code>, <code>/api/queue</code>, <code>/api/cmd</code>, <code>/api/mode</code>, <code>/api/browse</code>, <code>/api/queue/add</code>, etc.</small>
+    <input id="apiKey" placeholder="Colle ta clé API ici" />
+    <div class="btns">
+      <button class="primary" onclick="saveKey(true)">Enregistrer</button>
+      <button class="danger" onclick="clearKey()">Effacer</button>
+      <button onclick="getText('/api/health','out_health', false)">Test /api/health (sans clé)</button>
+    </div>
+    <pre id="out_health">—</pre>
+  </div>
+
+  <div class="row">
+    <div class="card">
+      <h2>Now playing</h2>
+
+      <div class="kv">
+        <span class="pill"><span id="dot_play" class="dot off"></span><span id="np_state">—</span></span>
+        <span class="pill">Vol: <b id="np_vol">—</b></span>
+        <span class="pill">Bitrate: <b id="np_bitrate">—</b></span>
+        <span class="pill">Audio: <b id="np_audio">—</b></span>
+      </div>
+
+      <div style="margin-top:10px" class="grid2">
+        <div>
+          <div class="tag">Titre</div>
+          <div class="mono" id="np_title">—</div>
+        </div>
+        <div>
+          <div class="tag">Artiste • Album</div>
+          <div class="mono" id="np_artist_album">—</div>
+        </div>
+      </div>
+
+      <div style="margin-top:10px">
+        <div class="tag">Position</div>
+        <div class="mono"><span id="np_elapsed">—</span> / <span id="np_duration">—</span></div>
+        <progress id="np_prog" value="0" max="100"></progress>
+      </div>
+
+      <div style="margin-top:12px" class="kv">
+        <span class="pill"><span id="dot_dac" class="dot off"></span>DAC strict</span>
+        <span class="pill"><span id="dot_snap" class="dot off"></span>snapcast</span>
+        <span class="pill">Mode: <b id="np_mode">—</b></span>
+      </div>
+
+      <div class="btns">
+        <button class="primary" onclick="cmd('toggle')">Toggle</button>
+        <button onclick="cmd('pause')">Pause</button>
+        <button onclick="cmd('resume')">Resume</button>
+        <button onclick="cmd('prev')">Prev</button>
+        <button onclick="cmd('next')">Next</button>
+        <button onclick="cmd('stop')">Stop</button>
+      </div>
+
+      <div class="btns">
+        <button class="primary" onclick="setMode('dac')">Mode: DAC</button>
+        <button onclick="setMode('snap')">Mode: Snap</button>
+        <button onclick="setMode('both')">Mode: Both</button>
+        <button class="ghost" onclick="refreshAll()">↻ Tout rafraîchir</button>
+      </div>
+
+      <details id="status_details" style="margin-top:10px">
+        <summary class="tag">Debug JSON (status)</summary>
+        <pre id="out_status">—</pre>
+      </details>
+    </div>
+
+    <div class="card">
+      <h2>File d’attente (Queue)</h2>
+      <div class="btns">
+        <button class="primary" onclick="getQueue()">GET /api/queue</button>
+        <button onclick="queuePlay(0)">Jouer pos 0</button>
+        <button class="danger" onclick="postJson('/api/queue/clear', {}, 'out_queue', () => getQueue())">Clear</button>
+      </div>
+      <pre id="out_queue">—</pre>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Bibliothèque (Browse) + Ajouter à la queue</h2>
+    <small>
+      Navigation MPD via <code>GET /api/browse?path=...</code> • Ajout via <code>POST /api/queue/add</code> avec <code>{"uri":"...", "play":false}</code>
+    </small>
+
+    <div class="btns">
+      <button class="primary" onclick="browseGo('')">Racine</button>
+      <button onclick="browseUp()">⬆︎ Up</button>
+      <span class="tag">Path:</span>
+      <input id="browse_path" class="mono" value="" style="max-width:520px" />
+      <button onclick="browseGo(document.getElementById('browse_path').value)">Aller</button>
+      <label class="tag"><input id="autoPlay" type="checkbox" /> Jouer après ajout</label>
+      <button class="ghost" onclick="browseReload()">↻</button>
+    </div>
+
+    <div id="browse_list" class="list"></div>
+    <pre id="out_browse">—</pre>
+  </div>
+
+<script>
+function pretty(text){ try { return JSON.stringify(JSON.parse(text), null, 2); } catch { return text; } }
+
+let _statusTimer = null;
+let _statusBusy = false;
+
+// ---- ticker (temps qui défile localement) ----
+let NP_TIMER = null;
+let NP_STATE = "stop";
+let NP_BASE_ELAPSED = 0;
+let NP_DURATION = 0;
+let NP_SYNC_MS = 0;
+
+function fmtTime(sec){
+  const s = Math.max(0, Number(sec)||0);
+  const m = Math.floor(s/60);
+  const r = Math.floor(s%60);
+  return `${m}:${String(r).padStart(2,'0')}`;
+}
+function npRender(elapsed, duration){
+  document.getElementById("np_elapsed").textContent = fmtTime(elapsed);
+  document.getElementById("np_duration").textContent = duration ? fmtTime(duration) : "—";
+
+  const prog = document.getElementById("np_prog");
+  if(duration > 0){
+    prog.max = 100;
+    prog.value = Math.max(0, Math.min(100, (elapsed/duration)*100));
+  }else{
+    prog.value = 0;
+  }
+}
+function npTick(){
+  // si pas "play", on n'avance pas
+  if(NP_STATE !== "play"){
+    npRender(NP_BASE_ELAPSED, NP_DURATION);
+    return;
+  }
+
+  const delta = (Date.now() - NP_SYNC_MS) / 1000;
+  let live = NP_BASE_ELAPSED + delta;
+
+  // clamp à la durée
+  if(NP_DURATION > 0 && live > NP_DURATION) live = NP_DURATION;
+
+  npRender(live, NP_DURATION);
+
+  // si on atteint la fin, on arrête le ticker (le prochain /api/status va trancher)
+  if(NP_DURATION > 0 && live >= NP_DURATION) npStopTicker();
+}
+function npStartTicker(){
+  if(NP_TIMER) return;
+  NP_TIMER = setInterval(npTick, 250);
+}
+function npStopTicker(){
+  if(!NP_TIMER) return;
+  clearInterval(NP_TIMER);
+  NP_TIMER = null;
+}
+
+// ---- API key + fetch ----
+function getKey(){
+  return (document.getElementById("apiKey").value || localStorage.getItem("toune_api_key") || "").trim();
+}
+function saveKey(withPing=false){
+  const k = getKey();
+  if(k) localStorage.setItem("toune_api_key", k);
+  if(withPing) refreshAll();
+}
+function clearKey(){
+  localStorage.removeItem("toune_api_key");
+  document.getElementById("apiKey").value="";
+}
+
+async function apiFetch(url, opts={}, includeKey=true){
+  const headers = new Headers(opts.headers || {});
+  if(includeKey && url.startsWith("/api") && url !== "/api/health"){
+    const k = getKey();
+    if(k) headers.set("X-API-Key", k);
+  }
+  return fetch(url, {...opts, headers});
+}
+
+async function getText(url, outId, includeKey=true){
+  const out=document.getElementById(outId); out.textContent="…";
+  try{
+    const r=await apiFetch(url, {}, includeKey);
+    const t=await r.text();
+    out.textContent=`${r.status} ${r.statusText}\n\n${pretty(t)}`;
+  }catch(e){
+    out.textContent="Erreur: "+e;
+  }
+}
+
+async function postJson(url, obj, outId, after){
+  const out=document.getElementById(outId); out.textContent="…";
+  try{
+    const r=await apiFetch(url,{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(obj)
+    }, true);
+    const t=await r.text();
+    out.textContent=`${r.status} ${r.statusText}\n\n${pretty(t)}`;
+    if(after) after();
+  }catch(e){
+    out.textContent="Erreur: "+e;
+  }
+}
+
+function cmd(action){
+  action=(action||"").trim().toLowerCase();
+  if(!action) return;
+  postJson("/api/cmd",{action},"out_queue", () => refreshAll());
+}
+function setMode(mode){
+  postJson("/api/mode",{mode},"out_queue", () => refreshAll());
+}
+function queuePlay(pos){
+  postJson("/api/queue/play",{pos},"out_queue", () => refreshAll());
+}
+
+// -------- Now Playing ----------
+function setDot(id, on){
+  const el = document.getElementById(id);
+  el.classList.remove("on","off");
+  el.classList.add(on ? "on" : "off");
+}
+function computeMode(outputs){
+  const dac = outputs && outputs["DAC strict"] && outputs["DAC strict"].outputenabled === "1";
+  const snap = outputs && outputs["snapcast"] && outputs["snapcast"].outputenabled === "1";
+  if(dac && snap) return "both";
+  if(dac) return "dac";
+  if(snap) return "snap";
+  return "none";
+}
+
+function updateNowPlayingUI(data){
+  const st = data.status || {};
+  const song = data.song || {};
+  const outs = data.outputs || {};
+
+  const state = st.state || "—";
+  document.getElementById("np_state").textContent = state;
+  setDot("dot_play", state === "play");
+
+  document.getElementById("np_vol").textContent = st.volume ?? "—";
+  document.getElementById("np_bitrate").textContent = st.bitrate ?? "—";
+  document.getElementById("np_audio").textContent = st.audio ?? "—";
+
+  const title = song.title || (song.file ? song.file.split("/").pop() : "—");
+  const artist = song.artist || "—";
+  const album = song.album || "—";
+  document.getElementById("np_title").textContent = title;
+  document.getElementById("np_artist_album").textContent = `${artist} • ${album}`;
+
+  const elapsed = Number(st.elapsed || 0);
+  const duration = Number(st.duration || song.duration || 0);
+
+  // sync ticker
+  NP_STATE = state;
+  NP_BASE_ELAPSED = elapsed;
+  NP_DURATION = duration;
+  NP_SYNC_MS = Date.now();
+  npTick();
+
+  if(state === "play") npStartTicker();
+  else npStopTicker();
+
+  const dacOn = outs["DAC strict"] && outs["DAC strict"].outputenabled === "1";
+  const snapOn = outs["snapcast"] && outs["snapcast"].outputenabled === "1";
+  setDot("dot_dac", !!dacOn);
+  setDot("dot_snap", !!snapOn);
+  document.getElementById("np_mode").textContent = computeMode(outs);
+}
+
+async function getStatusUI(){
+  if(_statusBusy) return;
+  _statusBusy = true;
+  try{
+    const r = await apiFetch("/api/status", {}, true);
+    const t = await r.text();
+    if(!r.ok) return;
+    let data = {};
+    try{ data = JSON.parse(t); }catch{ return; }
+    updateNowPlayingUI(data);
+  }finally{
+    _statusBusy = false;
+  }
+}
+
+async function getStatusDebug(){
+  const out = document.getElementById("out_status");
+  out.textContent = "…";
+  try{
+    const r = await apiFetch("/api/status", {}, true);
+    const t = await r.text();
+    out.textContent = `${r.status} ${r.statusText}\n\n${pretty(t)}`;
+    if(!r.ok) return;
+    try{ updateNowPlayingUI(JSON.parse(t)); }catch{}
+  }catch(e){
+    out.textContent = "Erreur: " + e;
+  }
+}
+
+function startStatusAutoRefresh(){
+  if(_statusTimer) clearInterval(_statusTimer);
+  // resync toutes les 5 secondes (ticker fait le “défilement” entre-temps)
+  _statusTimer = setInterval(getStatusUI, 5000);
+}
+
+document.addEventListener("visibilitychange", ()=>{
+  if(document.hidden){
+    if(_statusTimer) clearInterval(_statusTimer);
+    _statusTimer = null;
+    npStopTicker();
+  }else{
+    startStatusAutoRefresh();
+    getStatusUI();
+  }
+});
+
+function refreshAll(){
+  const det = document.getElementById("status_details");
+  if(det && det.open) getStatusDebug();
+  else getStatusUI();
+  getQueue();
+  browseReload();
+}
+
+async function getQueue(){
+  await getText('/api/queue','out_queue');
+}
+
+// --- Browse + Add ---
+let CURRENT_PATH = "";
+
+function browseGo(p){
+  CURRENT_PATH = (p || "").trim();
+  document.getElementById("browse_path").value = CURRENT_PATH;
+  browseReload();
+}
+function browseUp(){
+  const p = (CURRENT_PATH || "").trim();
+  if(!p){ browseGo(""); return; }
+  const parts = p.split("/").filter(Boolean);
+  parts.pop();
+  browseGo(parts.join("/"));
+}
+async function browseReload(){
+  const out=document.getElementById("out_browse");
+  const list=document.getElementById("browse_list");
+  out.textContent="…";
+  list.innerHTML = "";
+
+  const qs = new URLSearchParams();
+  if(CURRENT_PATH) qs.set("path", CURRENT_PATH);
+
+  try{
+    const r = await apiFetch("/api/browse?"+qs.toString(), {}, true);
+    const t = await r.text();
+    out.textContent = `${r.status} ${r.statusText}\n\n${pretty(t)}`;
+
+    if(!r.ok) return;
+    let data = {};
+    try{ data = JSON.parse(t); } catch { return; }
+    const items = (data.items || []);
+    renderBrowse(items);
+  }catch(e){
+    out.textContent="Erreur: "+e;
+  }
+}
+
+function renderBrowse(items){
+  const list=document.getElementById("browse_list");
+  if(!items.length){
+    list.innerHTML = `<div class="rowitem"><div class="grow"><b>(vide)</b></div></div>`;
+    return;
+  }
+
+  items.sort((a,b)=>{
+    const ta = a.type === "dir" ? 0 : 1;
+    const tb = b.type === "dir" ? 0 : 1;
+    if(ta !== tb) return ta - tb;
+    return (a.path||"").localeCompare(b.path||"");
+  });
+
+  for(const it of items){
+    const type = it.type || "";
+    const path = it.path || "";
+
+    const row = document.createElement("div");
+    row.className = "rowitem";
+
+    const icon = document.createElement("div");
+    icon.className = "icon";
+    icon.textContent = (type === "dir") ? "📁" : "🎵";
+
+    const main = document.createElement("div");
+    main.className = "grow";
+    const top = document.createElement("div");
+    top.className = "mono";
+    top.textContent = path;
+    const meta = document.createElement("div");
+    meta.className = "tag";
+    meta.textContent = (type === "dir") ? "dossier" : "fichier";
+    main.appendChild(top);
+    main.appendChild(meta);
+
+    const actions = document.createElement("div");
+    actions.className = "btns";
+
+    if(type === "dir"){
+      const b = document.createElement("button");
+      b.textContent = "Ouvrir";
+      b.onclick = ()=> browseGo(path);
+      actions.appendChild(b);
+    }else{
+      const add = document.createElement("button");
+      add.textContent = "Ajouter";
+      add.onclick = ()=> addToQueue(path, false);
+      const play = document.createElement("button");
+      play.className = "primary";
+      play.textContent = "Ajouter & jouer";
+      play.onclick = ()=> addToQueue(path, true);
+      actions.appendChild(add);
+      actions.appendChild(play);
+    }
+
+    row.appendChild(icon);
+    row.appendChild(main);
+    row.appendChild(actions);
+    list.appendChild(row);
+  }
+}
+
+async function addToQueue(uri, forcePlay){
+  const autoPlay = document.getElementById("autoPlay").checked;
+  const play = forcePlay || autoPlay;
+  await postJson("/api/queue/add", {uri, play}, "out_queue", () => refreshAll());
+}
+
+// init
+document.getElementById("apiKey").value = localStorage.getItem("toune_api_key") || "";
+
+document.getElementById("status_details").addEventListener("toggle", ()=>{
+  const det = document.getElementById("status_details");
+  if(det.open) getStatusDebug();
+});
+
+browseGo("");
+getStatusUI();
+startStatusAutoRefresh();
+</script>
+</body>
+</html>
