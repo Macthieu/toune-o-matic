@@ -5,146 +5,116 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>toune-o-matic</title>
 
-  <!-- =========================
-       CSS (séparé = plus propre)
-       ========================= -->
   <link rel="stylesheet" href="assets/css/app.css" />
-
-  <!-- =========================
-       JS (séparé = plus propre)
-       - "defer" = le script s'exécute après le HTML
-       ========================= -->
   <script defer src="assets/js/app.js"></script>
 </head>
 
 <body>
-  <!-- =====================================================
-       En-tête
-       ===================================================== -->
-  <h1>toune-o-matic</h1>
-  <small>UI (Nginx) • API sur <code>/api</code> → <code>127.0.0.1:11000</code></small>
+  <header>
+    <h1>toune-o-matic</h1>
+    <small class="tag">UI locale – contrôle MPD + Snapcast</small>
+  </header>
 
-  <!-- =====================================================
-       Section: Clé API
-       ===================================================== -->
-  <div class="card">
-    <h2>Clé API</h2>
-    <small>
-      Requis pour <code>/api/status</code>, <code>/api/queue</code>, <code>/api/cmd</code>, <code>/api/mode</code>,
-      <code>/api/browse</code>, <code>/api/queue/add</code>, etc.
-    </small>
-
-    <input id="apiKey" placeholder="Colle ta clé API ici" />
-
-    <div class="btns">
-      <button class="primary" onclick="saveKey(true)">Enregistrer</button>
-      <button class="danger" onclick="clearKey()">Effacer</button>
-      <button onclick="getText('/api/health','out_health', false)">Test /api/health (sans clé)</button>
-    </div>
-
-    <pre id="out_health">—</pre>
-  </div>
-
-  <!-- =====================================================
-       Section: Lecture en cours + Queue
-       ===================================================== -->
   <div class="row">
-
-    <!-- -------------------------
-         Now playing
-         ------------------------- -->
-    <div class="card">
-      <h2>Now playing</h2>
-
-      <div class="kv">
-        <span class="pill"><span id="dot_play" class="dot off"></span><span id="np_state">—</span></span>
-        <span class="pill">Vol: <b id="np_vol">—</b></span>
-        <span class="pill">Bitrate: <b id="np_bitrate">—</b></span>
-        <span class="pill">Audio: <b id="np_audio">—</b></span>
-      </div>
-
-      <div style="margin-top:10px" class="grid2">
+    <!-- Connexion / API -->
+    <section class="card">
+      <h2>Connexion</h2>
+      <div class="grid2">
         <div>
-          <div class="tag">Titre</div>
-          <div class="mono" id="np_title">—</div>
+          <label class="tag" for="apiKey">Clé API</label>
+          <input id="apiKey" type="password" placeholder="(facultatif)" autocomplete="off" />
         </div>
         <div>
-          <div class="tag">Artiste • Album</div>
-          <div class="mono" id="np_artist_album">—</div>
+          <label class="tag" for="browse_path">Chemin (browse)</label>
+          <input id="browse_path" class="mono" type="text" value="" placeholder="" />
         </div>
       </div>
 
-      <div style="margin-top:10px">
-        <div class="tag">Position</div>
-        <div class="mono"><span id="np_elapsed">—</span> / <span id="np_duration">—</span></div>
-        <progress id="np_prog" value="0" max="100"></progress>
-      </div>
-
-      <div style="margin-top:12px" class="kv">
-        <span class="pill"><span id="dot_dac" class="dot off"></span>DAC strict</span>
-        <span class="pill"><span id="dot_snap" class="dot off"></span>snapcast</span>
-        <span class="pill">Mode: <b id="np_mode">—</b></span>
+      <div class="btns">
+        <button class="primary" onclick="saveKey(true)">Sauver</button>
+        <button class="ghost" onclick="clearKey()">Effacer</button>
+        <button onclick="refreshAll()">Rafraîchir</button>
+        <button onclick="getText('/api/health','out_health', false)">Health</button>
       </div>
 
       <div class="btns">
-        <button class="primary" onclick="cmd('toggle')">Toggle</button>
-        <button onclick="cmd('pause')">Pause</button>
-        <button onclick="cmd('resume')">Resume</button>
-        <button onclick="cmd('prev')">Prev</button>
-        <button onclick="cmd('next')">Next</button>
-        <button onclick="cmd('stop')">Stop</button>
+        <label class="pill">
+          <input id="autoPlay" type="checkbox" />
+          <span>Auto-play</span>
+        </label>
+
+        <span class="pill"><span id="dot_play" class="dot"></span> Lecture</span>
+        <span class="pill"><span id="dot_dac" class="dot"></span> DAC</span>
+        <span class="pill"><span id="dot_snap" class="dot"></span> Snapcast</span>
+      </div>
+
+      <pre id="out_health" class="mono" aria-label="Sortie health"></pre>
+      <pre id="out_status" class="mono" aria-label="Sortie status"></pre>
+    </section>
+
+    <!-- Lecture -->
+    <section class="card">
+      <h2>Lecture</h2>
+
+      <div class="btns">
+        <button onclick="cmd('toggle')">⏯︎ Toggle</button>
+        <button onclick="cmd('pause')">⏸︎ Pause</button>
+        <button onclick="cmd('resume')">▶︎ Play</button>
+        <button onclick="cmd('prev')">⏮︎ Préc</button>
+        <button onclick="cmd('next')">⏭︎ Suiv</button>
+        <button class="danger" onclick="cmd('stop')">⏹︎ Stop</button>
       </div>
 
       <div class="btns">
-        <button class="primary" onclick="setMode('dac')">Mode: DAC</button>
-        <button onclick="setMode('snap')">Mode: Snap</button>
-        <button onclick="setMode('both')">Mode: Both</button>
-        <button class="ghost" onclick="refreshAll()">↻ Tout rafraîchir</button>
+        <button class="ghost" onclick="setMode('dac')">DAC</button>
+        <button class="ghost" onclick="setMode('snap')">Snap</button>
+        <button class="ghost" onclick="setMode('both')">Both</button>
       </div>
 
-      <details style="margin-top:10px">
-        <summary class="tag">Debug JSON (status)</summary>
-        <pre id="out_status">—</pre>
-      </details>
-    </div>
+      <div style="margin-top:12px">
+        <div class="tag">Now playing</div>
+        <div id="np_title" style="font-size:18px;font-weight:700;margin:6px 0">—</div>
+        <div id="np_artist_album" class="tag">—</div>
 
-    <!-- -------------------------
-         Queue
-         ------------------------- -->
-    <div class="card">
-      <h2>File d’attente (Queue)</h2>
-      <div class="btns">
-        <button class="primary" onclick="getQueue()">GET /api/queue</button>
-        <button onclick="queuePlay(0)">Jouer pos 0</button>
-        <button class="danger" onclick="postJson('/api/queue/clear', {}, 'out_queue', () => getQueue())">Clear</button>
+        <div class="kv" style="margin-top:10px">
+          <span class="pill">Écoulé: <span id="np_elapsed" class="mono">0:00</span></span>
+          <span class="pill">Durée: <span id="np_duration" class="mono">0:00</span></span>
+          <span class="pill">État: <span id="np_state" class="mono">—</span></span>
+          <span class="pill">Volume: <span id="np_volume" class="mono">—</span></span>
+        </div>
+
+        <div class="bar" style="margin-top:10px">
+          <div id="np_prog" class="barfill" style="width:0%"></div>
+        </div>
       </div>
-      <pre id="out_queue">—</pre>
-    </div>
-
+    </section>
   </div>
 
-  <!-- =====================================================
-       Section: Bibliothèque (Browse)
-       ===================================================== -->
-  <div class="card">
-    <h2>Bibliothèque (Browse) + Ajouter à la queue</h2>
-    <small>
-      Navigation MPD via <code>GET /api/browse?path=...</code> • Ajout via <code>POST /api/queue/add</code> avec
-      <code>{"uri":"...", "play":false}</code>
-    </small>
+  <div class="row">
+    <!-- Queue -->
+    <section class="card">
+      <h2>Queue</h2>
+      <div class="btns">
+        <button onclick="getQueue()">Rafraîchir</button>
+        <button onclick="queuePlay(0)">▶︎ Play #0</button>
+        <button class="danger" onclick="postJson('/api/queue/clear', {}, 'out_queue', () => getQueue())">Vider</button>
+      </div>
+      <pre id="out_queue" class="mono" aria-label="Sortie queue"></pre>
+    </section>
 
-    <div class="btns">
-      <button class="primary" onclick="browseGo('')">Racine</button>
-      <button onclick="browseUp()">⬆︎ Up</button>
-      <span class="tag">Path:</span>
-      <input id="browse_path" class="mono" value="" style="max-width:520px" />
-      <button onclick="browseGo(document.getElementById('browse_path').value)">Aller</button>
-      <label class="tag"><input id="autoPlay" type="checkbox" /> Jouer après ajout</label>
-      <button class="ghost" onclick="browseReload()">↻</button>
-    </div>
+    <!-- Browse -->
+    <section class="card">
+      <h2>Browse</h2>
+      <div class="btns">
+        <button onclick="browseGo('')">Racine</button>
+        <button onclick="browseUp()">⬆︎ Up</button>
+        <button onclick="browseGo(document.getElementById('browse_path').value)">Go</button>
+        <button onclick="browseReload()">Reload</button>
+      </div>
 
-    <div id="browse_list" class="list"></div>
-    <pre id="out_browse">—</pre>
+      <div id="browse_list" class="list" aria-label="Liste browse"></div>
+      <pre id="out_browse" class="mono" aria-label="Sortie browse"></pre>
+    </section>
   </div>
 </body>
 </html>

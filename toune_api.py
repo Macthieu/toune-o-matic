@@ -184,36 +184,98 @@ def status():
 def mode():
     body = request.get_json(silent=True) or {}
     m = str(body.get("mode", "")).strip().lower()
-    if m not in ("dac", "snap", "both"):
-        return jsonify({"ok": False, "error": "mode must be dac|snap|both"}), 400
+
+    # Modes supportés
+    # - dac : seulement le DAC
+    # - snap : seulement snapcast
+    # - both : DAC + snapcast
+    # - hdmi : seulement HDMI
+    # - headphones : seulement Headphones
+    # - none : coupe toutes les sorties
+    if m not in ("dac", "snap", "both", "hdmi", "headphones", "none"):
+        return jsonify({"ok": False, "error": "mode must be dac|snap|both|hdmi|headphones|none"}), 400
+
+    # Noms des sorties (tu peux les rendre configurables plus tard si tu veux)
+    OUT_HDMI_NAME = "HDMI"
+    OUT_HP_NAME   = "Headphones"
 
     def work(c: MPDClient):
         outs = mpd_outputs(c)
 
-        if OUT_DAC_NAME not in outs:
-            return jsonify({"ok": False, "error": f"Output not found: {OUT_DAC_NAME}"}), 400
-        if OUT_SNAP_NAME not in outs:
-            return jsonify({"ok": False, "error": f"Output not found: {OUT_SNAP_NAME}"}), 400
+        want = set()
+        if m == "dac":
+            want = {OUT_DAC_NAME}
+        elif m == "snap":
+            want = {OUT_SNAP_NAME}
+        elif m == "both":
+            want = {OUT_DAC_NAME, OUT_SNAP_NAME}
+        elif m == "hdmi":
+            want = {OUT_HDMI_NAME}
+        elif m == "headphones":
+            want = {OUT_HP_NAME}
+        elif m == "none":
+            want = set()
 
-        dac_id = int(outs[OUT_DAC_NAME]["outputid"])
-        snap_id = int(outs[OUT_SNAP_NAME]["outputid"])
+        # Vérifie que les sorties demandées existent
+        missing = [name for name in want if name not in outs]
+        if missing:
+            return jsonify({"ok": False, "error": "Output(s) not found", "missing": missing}), 400
 
-        if m == "both":
-            c.enableoutput(dac_id)
-            c.enableoutput(snap_id)
-        elif m == "dac":
-            c.enableoutput(dac_id)
-            c.disableoutput(snap_id)
-        else:  # snap
-            c.disableoutput(dac_id)
-            c.enableoutput(snap_id)
+        # EXCLUSIF: active ce qu'on veut, désactive tout le reste
+        for name, o in outs.items():
+            oid = int(o.get("outputid", 0))
+            if name in want:
+                c.enableoutput(oid)
+            else:
+                c.disableoutput(oid)
 
-        return jsonify({"ok": True, "mode": m})
+        return jsonify({"ok": True, "mode": m, "enabled": sorted(list(want))})
 
     try:
         return with_mpd(work)
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@APP.post("/api/volume")
+@require_key
+def volume():
+    body = request.get_json(silent=True) or {}
+
+    level = body.get("level", None)
+    delta = body.get("delta", None)
+
+    def work(c: MPDClient):
+        st = c.status() or {}
+        try:
+            cur = int(st.get("volume", "0"))
+        except Exception:
+            cur = 0
+        if cur < 0:
+            cur = 0
+
+        # Soit on reçoit delta, soit level
+        if delta is not None:
+            try:
+                d = int(delta)
+            except Exception:
+                d = 0
+            target = clamp(cur + d, 0, 100)
+        else:
+            try:
+                target = int(level)
+            except Exception:
+                target = cur
+            target = clamp(target, 0, 100)
+
+        c.setvol(target)
+        return jsonify({"ok": True, "volume": target})
+
+    try:
+        return with_mpd(work)
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
 
 @APP.post("/api/cmd")
 @require_key
