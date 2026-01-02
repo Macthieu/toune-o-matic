@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Toune-o-Matic</title>
     <link rel="stylesheet" href="assets/css/app.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body>
 
@@ -55,6 +56,7 @@
                 <div class="cover-container">
                     <img id="np_cover" src="assets/img/no_cover.png" onerror="this.src='assets/img/no_cover.png'">
                 </div>
+                
                 <h2 id="np_title">---</h2>
                 <h3 id="np_artist">---</h3>
                 <p id="np_album" style="color:#666">---</p>
@@ -71,15 +73,32 @@
                     <span id="time_total" style="min-width:45px;">0:00</span>
                 </div>
                 
-                <div class="btns large-btns">
-                    <button onclick="apiAction('previous')">⏮</button>
-                    <button onclick="apiAction('toggle')" class="primary big-play">⏯</button>
-                    <button onclick="apiAction('next')">⏭</button>
+                <div class="btns large-btns control-row" style="display:flex; justify-content:center; gap:15px; align-items:center;">
+                    <button id="btn-shuffle" class="control-btn secondary" onclick="toggleShuffle()" title="Aléatoire">
+                        <i class="fas fa-random"></i>
+                    </button>
+
+                    <button onclick="apiAction('previous')">
+                        <i class="fas fa-step-backward"></i>
+                    </button>
+
+                    <button id="btn-play-pause" onclick="apiAction('toggle')" class="primary big-play">
+                        <i class="fas fa-play"></i>
+                    </button>
+
+                    <button onclick="apiAction('next')">
+                        <i class="fas fa-step-forward"></i>
+                    </button>
+
+                    <button id="btn-repeat" class="control-btn secondary" onclick="toggleRepeat()" title="Répéter">
+                        <i class="fas fa-redo"></i>
+                    </button>
                 </div>
-                <div class="volume-ctrl">
-                    <span>🔈</span>
+
+                <div class="volume-ctrl" style="margin-top:20px;">
+                    <span><i class="fas fa-volume-down"></i></span>
                     <input type="range" id="volume" min="0" max="100" onchange="setVolume(this.value)">
-                    <span>🔊</span>
+                    <span><i class="fas fa-volume-up"></i></span>
                 </div>
             </div>
         </div>

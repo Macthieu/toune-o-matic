@@ -10,6 +10,9 @@
     window.selectedPaths = new Set();
     window.isDragging = false; 
 
+    // =========================================
+    // SECTION 1: CŒUR (API & UTILS)
+    // =========================================
     async function apiFetch(url, method = "GET", body = null) {
         const key = $("apiKey")?.value || localStorage.getItem(KEY_LS) || "secret";
         const headers = { "X-API-Key": key, "Content-Type": "application/json" };
@@ -18,7 +21,12 @@
         try { const r = await fetch(url, opts); return await r.json(); } catch(e) { return null; }
     }
 
-    // --- NAVIGATION ---
+    function esc(s) { return s.replace(/'/g, "\\'"); }
+    function formatTime(s) { if(isNaN(s)) return "0:00"; return `${Math.floor(s/60)}:${Math.floor(s%60).toString().padStart(2,'0')}`; }
+
+    // =========================================
+    // SECTION 2: NAVIGATION & TOOLBAR
+    // =========================================
     window.switchTab = (t) => { 
         document.querySelectorAll(".tab-content,.tab-btn").forEach(e=>e.classList.remove("active")); 
         const btn = document.querySelector(`button[onclick="switchTab('${t}')"]`);
@@ -30,17 +38,12 @@
         if(t==='parametres') loadAudioOutputs(); 
     };
 
-    // --- BARRE D'OUTILS INTELLIGENTE ---
     function renderToolbar() {
         const count = window.selectedPaths.size;
         const ctx = $("biblio_context_hidden")?.innerText || "";
-        
-        // Est-on dans une vue "profonde" (Détail) ?
         const isDetail = ['detail_album', 'detail_artist', 'detail_genre', 'folders'].includes(currentView);
         const showContextBar = (ctx || navHistory.length > 0 || isDetail);
 
-        // 1. Barre du haut (Boutons principaux)
-        // Si la barre contextuelle est affichée en dessous, on enlève l'arrondi du bas
         let html = `
         <div class="toolbar-unified" style="margin-bottom:0; border-bottom:none; ${showContextBar ? 'border-radius: 6px 6px 0 0;' : 'border-radius: 6px;'}">
             <div class="toolbar-section" style="display:flex; gap:5px; align-items:center; overflow-x:auto;">
@@ -57,7 +60,6 @@
             </div>
         </div>`;
 
-        // 2. Barre contextuelle (Gris Foncé) avec le bouton RETOUR
         if (showContextBar) {
             html += `
             <div class="toolbar-unified" style="margin-top:0; background:#e2e6ea; border-top:1px solid #d6d8db; border-radius: 0 0 6px 6px; align-items:center;">
@@ -67,44 +69,29 @@
                 </div>
             </div>`;
         }
-
         return html;
     }
 
     function updateToolbar() { $("biblio_header").innerHTML = renderToolbar(); }
 
     window.goBack = () => {
-        // 1. Si on a de l'historique, on l'utilise
         if (navHistory.length > 0) {
             const previous = navHistory.pop();
             currentView = previous.view;
             $("biblio_context_hidden").innerText = previous.title;
-            // Restauration simple
             if (previous.view === 'artists') loadArtists(false, true);
             else if (previous.view === 'albums') loadGlobalAlbums(false, true);
             else if (previous.view === 'genres') loadGenres(true);
             else loadArtists(false, true);
             return;
         }
-
-        // 2. Si pas d'historique (ex: après refresh F5), on remonte logiquement
-        if (currentView === 'detail_album') {
-            // Depuis un album, on remonte aux Artistes (choix le plus sûr)
-            loadArtists(); 
-        } else if (currentView === 'detail_artist') {
-            loadArtists();
-        } else if (currentView === 'detail_genre') {
-            loadGenres();
-        } else if (currentView === 'folders') {
-            // Dossier parent géré par loadFolders lui-même, ici retour racine
-            loadArtists();
-        } else {
-            // Par défaut
-            loadArtists();
-        }
+        if (currentView === 'folders') loadArtists(); 
+        else loadArtists();
     };
 
-    // --- HELPERS LISTES ---
+    // =========================================
+    // SECTION 3: CHARGEMENT CONTENU (Bibliothèque)
+    // =========================================
     function renderGrid(data, append, renderFn) {
         const list = $("biblio_list");
         if(!append) list.className = "list grid-list";
@@ -124,7 +111,6 @@
         isLoading = false;
     }
 
-    // --- VUES ---
     function setupView(view, skipClear=false) {
         if(!skipClear) {
             currentPage = 1; $("biblio_list").innerHTML = ""; window.scrollTo(0,0); $("biblio_context_hidden").innerText = ""; 
@@ -133,6 +119,7 @@
         setupScroll();
     }
 
+    // --- Chargeurs ---
     window.loadArtists = async (append=false, isRestoring=false) => {
         if(!append && !isRestoring) { navHistory = []; setupView('artists'); }
         if(isRestoring) { setupView('artists', true); }
@@ -151,7 +138,6 @@
     };
 
     window.openAlbum = async (album) => {
-        // On sauvegarde d'où on vient
         navHistory.push({view: currentView, title: $("biblio_context_hidden").innerText || "Retour"});
         currentView = 'detail_album';
         $("biblio_context_hidden").innerText = album;
@@ -184,7 +170,13 @@
         }
     };
 
-    // --- BLUETOOTH ---
+    function setSentinel(s) { $("scroll_sentinel").style.display = (s==='loading')?'block':'none'; }
+    function setupScroll() { if(observer) observer.disconnect(); observer=new IntersectionObserver(e=>{if(e[0].isIntersecting && !isLoading && !['detail_album','detail_artist','folders','genres'].includes(currentView)) loadMore();}); observer.observe($("scroll_sentinel")); }
+    window.loadMore = () => { currentPage++; if(currentView==='artists') loadArtists(true); else if(currentView==='albums') loadGlobalAlbums(true); };
+
+    // =========================================
+    // SECTION 4: BLUETOOTH
+    // =========================================
     window.scanBluetooth = async () => {
         $("bt_list").innerHTML = "📡 Scan en cours...";
         const paired = await apiFetch("/api/bluetooth/paired");
@@ -213,7 +205,9 @@
     };
     window.disconnectBT = async (mac) => { await apiFetch("/api/bluetooth/disconnect", "POST", {mac}); window.scanBluetooth(); };
 
-    // --- AUDIO & CONFIG ---
+    // =========================================
+    // SECTION 5: CONFIG AUDIO
+    // =========================================
     window.loadAudioOutputs = async () => { 
         const d = await apiFetch("/api/audio/status");
         const div = $("audio_outputs_list");
@@ -234,18 +228,62 @@
     window.saveDacConfig = async () => { const id = $("cfg_id").value; const mixer = $("cfg_mixer").value; $("config_modal").style.display = "none"; const r = await apiFetch("/api/audio/configure", "POST", {id: parseInt(id), mixer: mixer}); alert(r?.ok ? "Sauvegardé !" : "Erreur"); };
     window.toggleAudioOutput = async (id, en) => { await apiFetch("/api/audio/outputs/toggle", "POST", {id, enabled:en}); setTimeout(loadAudioOutputs, 600); };
 
-    // --- PLAYER & UTILS ---
-    function formatTime(s) { if(isNaN(s)) return "0:00"; return `${Math.floor(s/60)}:${Math.floor(s%60).toString().padStart(2,'0')}`; }
+    // =========================================
+    // SECTION 6: LECTEUR & STATUS (Modifié)
+    // =========================================
     function startTimer() { if(timerInterval) clearInterval(timerInterval); timerInterval = setInterval(()=> { if(isPlaying && currentElapsed < currentDuration && !window.isDragging) { currentElapsed++; updateTimeUI(); } }, 1000); }
     function updateTimeUI() { $("time_elapsed").innerText = formatTime(currentElapsed); $("time_total").innerText = formatTime(currentDuration); $("seek_bar").max = currentDuration; $("seek_bar").value = currentElapsed; }
+    
     window.seekTrack = async (s) => { window.isDragging = false; currentElapsed = parseInt(s); updateTimeUI(); await apiFetch("/api/player/seek", "POST", {seconds: currentElapsed}); refreshStatus(); };
-    async function refreshStatus() { const d = await apiFetch("/api/status"); if(d?.ok) { const c=d.current||{}, s=d.status||{}; $("np_title").innerText=c.title||"-"; $("np_artist").innerText=c.artist||"-"; $("np_album").innerText=c.album||""; isPlaying = (s.state === "play"); if(s.time && s.time.includes(":")){ const p = s.time.split(':'); if(!window.isDragging) { currentElapsed = parseInt(p[0]); currentDuration = parseInt(p[1]); updateTimeUI(); } } else if(s.state === "stop") { currentElapsed=0; currentDuration=0; updateTimeUI(); } if(c.file && $("np_cover").dataset.last !== c.file) { $("np_cover").src=`/api/content/cover?path=${encodeURIComponent(c.file)}&t=${Date.now()}`; $("np_cover").dataset.last=c.file; } } }
-    function renderTrackRow(t) { return `<div class="rowitem"><input type="checkbox" data-path="${esc(t.path)}" onchange="toggleSelection('${esc(t.path)}', this)"><div class="grow"><b>${t.title}</b><br><small>${t.artist}</small></div><button onclick="playNowPath('${esc(t.path)}')" class="primary">▶</button><button onclick="addToQueuePath('${esc(t.path)}', this)">+</button></div>`; }
-    function esc(s) { return s.replace(/'/g, "\\'"); }
-    function setSentinel(s) { $("scroll_sentinel").style.display = (s==='loading')?'block':'none'; }
-    function setupScroll() { if(observer) observer.disconnect(); observer=new IntersectionObserver(e=>{if(e[0].isIntersecting && !isLoading && !['detail_album','detail_artist','folders','genres'].includes(currentView)) loadMore();}); observer.observe($("scroll_sentinel")); }
-    window.loadMore = () => { currentPage++; if(currentView==='artists') loadArtists(true); else if(currentView==='albums') loadGlobalAlbums(true); };
+    
+    // --- NOUVEAU: Fonctions Shuffle/Repeat ---
+    window.toggleShuffle = async () => { await apiFetch("/api/player/shuffle", "POST"); refreshStatus(); };
+    window.toggleRepeat = async () => { await apiFetch("/api/player/repeat", "POST"); refreshStatus(); };
 
+    // --- REFRESH GLOBAL (Boucle principale) ---
+    async function refreshStatus() { 
+        const d = await apiFetch("/api/status"); 
+        if(d?.ok) { 
+            const c=d.current||{}, s=d.status||{}; 
+            $("np_title").innerText=c.title||"-"; 
+            $("np_artist").innerText=c.artist||"-"; 
+            $("np_album").innerText=c.album||""; 
+            isPlaying = (s.state === "play"); 
+
+            // Mise à jour Bouton Play/Pause
+            const btnPlay = $("btn-play-pause");
+            if(btnPlay) btnPlay.innerHTML = isPlaying ? '<i class="fas fa-pause"></i>' : '<i class="fas fa-play"></i>';
+
+            // Mise à jour Boutons Shuffle/Repeat (Illuminé si actif)
+            const btnShuf = $("btn-shuffle");
+            const btnRep = $("btn-repeat");
+            if(btnShuf) btnShuf.classList.toggle("active", s.random == 1 || s.random === true);
+            if(btnRep) btnRep.classList.toggle("active", s.repeat == 1 || s.repeat === true);
+
+            // Mise à jour Temps
+            if(s.time && s.time.includes(":")){ 
+                const p = s.time.split(':'); 
+                if(!window.isDragging) { 
+                    currentElapsed = parseInt(p[0]); 
+                    currentDuration = parseInt(p[1]); 
+                    updateTimeUI(); 
+                } 
+            } else if(s.state === "stop") { 
+                currentElapsed=0; currentDuration=0; updateTimeUI(); 
+            } 
+            
+            // Mise à jour Pochette
+            if(c.file && $("np_cover").dataset.last !== c.file) { 
+                $("np_cover").src=`/api/content/cover?path=${encodeURIComponent(c.file)}&t=${Date.now()}`; 
+                $("np_cover").dataset.last=c.file; 
+            } 
+        } 
+    }
+
+    // =========================================
+    // SECTION 7: ACTIONS UTILISATEUR
+    // =========================================
+    function renderTrackRow(t) { return `<div class="rowitem"><input type="checkbox" data-path="${esc(t.path)}" onchange="toggleSelection('${esc(t.path)}', this)"><div class="grow"><b>${t.title}</b><br><small>${t.artist}</small></div><button onclick="playNowPath('${esc(t.path)}')" class="primary">▶</button><button onclick="addToQueuePath('${esc(t.path)}', this)">+</button></div>`; }
     window.toggleSelection = (p, el) => { if(el.checked) window.selectedPaths.add(p); else window.selectedPaths.delete(p); updateToolbar(); };
     window.apiAction = async (a) => { await apiFetch(`/api/player/${a}`, "POST"); refreshStatus(); };
     window.setVolume = (v) => apiFetch(`/api/volume/${v}`, "POST");
@@ -262,5 +300,6 @@
     window.toggleAllVisible = () => { const bs=document.querySelectorAll('#biblio_list input[type="checkbox"]'); const all=Array.from(bs).every(c=>c.checked); bs.forEach(c=>{c.checked=!all; if(!all) window.selectedPaths.add(c.dataset.path); else window.selectedPaths.delete(c.dataset.path);}); updateToolbar(); };
     window.closeModal = () => { $("progress_modal").style.display="none"; };
 
+    // --- INITIALISATION ---
     document.addEventListener("DOMContentLoaded", () => { const k=localStorage.getItem(KEY_LS); if(k)$("apiKey").value=k; startTimer(); setInterval(refreshStatus, 1000); refreshStatus(); });
 })();
