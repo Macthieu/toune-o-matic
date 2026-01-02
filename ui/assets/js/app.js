@@ -1,439 +1,266 @@
-/* toune-o-matic UI
-   Objectifs:
-   - code séparé de index.html (plus propre)
-   - rafraîchissement robuste (timeout + pas de blocage)
-   - timer "qui défile" visuellement même si l'API répond plus lentement
-*/
+(function() {
+    "use strict";
+    const $ = (id) => document.getElementById(id);
+    const KEY_LS = "toune_api_key";
+    
+    let currentElapsed = 0, currentDuration = 0, isPlaying = false, timerInterval = null;
+    let observer = null, isLoading = false, currentPage = 1, currentView = "artists";
+    let navHistory = []; 
 
-(function(){
-  "use strict";
+    window.selectedPaths = new Set();
+    window.isDragging = false; 
 
-  // =========================
-  // Helpers
-  // =========================
-  function $(id){ return document.getElementById(id); }
-
-  function pretty(text){
-    try { return JSON.stringify(JSON.parse(text), null, 2); }
-    catch { return text; }
-  }
-
-  function fmtTime(sec){
-    const s = Math.max(0, Number(sec) || 0);
-    const m = Math.floor(s/60);
-    const r = Math.floor(s%60);
-    return `${m}:${String(r).padStart(2,'0')}`;
-  }
-
-  function setDot(id, on){
-    const el = $(id);
-    if(!el) return;
-    el.classList.remove("on","off");
-    el.classList.add(on ? "on" : "off");
-  }
-
-  // =========================
-  // API key (localStorage)
-  // =========================
-  const KEY_LS = "toune_api_key";
-
-  function getKey(){
-    return (($("apiKey")?.value) || localStorage.getItem(KEY_LS) || "").trim();
-  }
-
-  function saveKey(withPing=false){
-    const k = getKey();
-    if(k) localStorage.setItem(KEY_LS, k);
-    if(withPing) refreshAll();
-  }
-
-  function clearKey(){
-    localStorage.removeItem(KEY_LS);
-    if($("apiKey")) $("apiKey").value = "";
-  }
-
-  // Expose pour les onclick="" (si tu les gardes)
-  window.saveKey  = saveKey;
-  window.clearKey = clearKey;
-
-  // =========================
-  // fetch() robuste (timeout)
-  // =========================
-  async function apiFetch(url, opts={}, includeKey=true, timeoutMs=2500){
-    const headers = new Headers(opts.headers || {});
-    if(includeKey && url.startsWith("/api") && url !== "/api/health"){
-      const k = getKey();
-      if(k) headers.set("X-API-Key", k);
+    async function apiFetch(url, method = "GET", body = null) {
+        const key = $("apiKey")?.value || localStorage.getItem(KEY_LS) || "secret";
+        const headers = { "X-API-Key": key, "Content-Type": "application/json" };
+        const opts = { method, headers };
+        if (body) opts.body = JSON.stringify(body);
+        try { const r = await fetch(url, opts); return await r.json(); } catch(e) { return null; }
     }
 
-    const controller = new AbortController();
-    const timer = setTimeout(()=>controller.abort(), timeoutMs);
-
-    try{
-      return await fetch(url, { ...opts, headers, signal: controller.signal });
-    }finally{
-      clearTimeout(timer);
-    }
-  }
-
-  async function getText(url, outId, includeKey=true){
-    const out = $(outId);
-    if(out) out.textContent = "…";
-    try{
-      const r = await apiFetch(url, {}, includeKey);
-      const t = await r.text();
-      if(out) out.textContent = `${r.status} ${r.statusText}\n\n${pretty(t)}`;
-    }catch(e){
-      if(out) out.textContent = "Erreur: " + (e?.name === "AbortError" ? "timeout" : e);
-    }
-  }
-
-  async function postJson(url, obj, outId, after){
-    const out = $(outId);
-    if(out) out.textContent = "…";
-    try{
-      const r = await apiFetch(url, {
-        method: "POST",
-        headers: {"Content-Type":"application/json"},
-        body: JSON.stringify(obj)
-      }, true);
-      const t = await r.text();
-      if(out) out.textContent = `${r.status} ${r.statusText}\n\n${pretty(t)}`;
-      if(after) after();
-    }catch(e){
-      if(out) out.textContent = "Erreur: " + (e?.name === "AbortError" ? "timeout" : e);
-    }
-  }
-
-  // Expose pour onclick=""
-  window.getText  = getText;
-  window.postJson = postJson;
-
-  // =========================
-  // Actions
-  // =========================
-  function cmd(action){
-    action = (action || "").trim().toLowerCase();
-    if(!action) return;
-    postJson("/api/cmd", {action}, "out_queue", () => refreshAll()); // out_queue volontaire
-  }
-
-  function setMode(mode){
-    postJson("/api/mode", {mode}, "out_queue", () => refreshAll());
-  }
-
-  function queuePlay(pos){
-    postJson("/api/queue/play", {pos}, "out_queue", () => refreshAll());
-  }
-
-  window.cmd = cmd;
-  window.setMode = setMode;
-  window.queuePlay = queuePlay;
-
-  // =========================
-  // Now Playing (UI + ticking local)
-  // =========================
-  function computeMode(outputs){
-    const dac  = outputs && outputs["DAC strict"] && outputs["DAC strict"].outputenabled === "1";
-    const snap = outputs && outputs["snapcast"]   && outputs["snapcast"].outputenabled   === "1";
-    if(dac && snap) return "both";
-    if(dac) return "dac";
-    if(snap) return "snap";
-    return "none";
-  }
-
-  // snapshot pour animer le temps même entre 2 polls
-  const NP = {
-    state: "—",
-    elapsed: 0,
-    duration: 0,
-    updatedAtMs: 0
-  };
-
-  function renderElapsed(elapsed, duration){
-    if($("np_elapsed")) $("np_elapsed").textContent = fmtTime(elapsed);
-    if($("np_duration")) $("np_duration").textContent = duration ? fmtTime(duration) : "—";
-
-    const prog = $("np_prog");
-    if(prog){
-      if(duration > 0){
-        prog.max = 100;
-        prog.value = Math.max(0, Math.min(100, (elapsed/duration)*100));
-      }else{
-        prog.value = 0;
-      }
-    }
-  }
-
-  function updateNowPlayingUI(data){
-    const st   = data.status  || {};
-    const song = data.song    || {};
-    const outs = data.outputs || {};
-
-    const state = st.state || "—";
-    NP.state = state;
-
-    $("np_state").textContent = state;
-    setDot("dot_play", state === "play");
-
-    $("np_vol").textContent     = st.volume  ?? "—";
-    $("np_bitrate").textContent = st.bitrate ?? "—";
-    $("np_audio").textContent   = st.audio   ?? "—";
-
-    const title  = song.title || (song.file ? song.file.split("/").pop() : "—");
-    const artist = song.artist || "—";
-    const album  = song.album  || "—";
-    $("np_title").textContent = title;
-    $("np_artist_album").textContent = `${artist} • ${album}`;
-
-    const elapsed  = Number(st.elapsed || 0);
-    const duration = Number(st.duration || song.duration || 0);
-
-    NP.elapsed = elapsed;
-    NP.duration = duration;
-    NP.updatedAtMs = Date.now();
-
-    renderElapsed(elapsed, duration);
-
-    const dacOn  = outs["DAC strict"] && outs["DAC strict"].outputenabled === "1";
-    const snapOn = outs["snapcast"]   && outs["snapcast"].outputenabled   === "1";
-    setDot("dot_dac",  !!dacOn);
-    setDot("dot_snap", !!snapOn);
-    $("np_mode").textContent = computeMode(outs);
-  }
-
-  function tickNowPlaying(){
-    // Si on joue, on avance visuellement le temps depuis le dernier status reçu
-    if(NP.state !== "play") return;
-    if(!NP.updatedAtMs) return;
-
-    const dt = (Date.now() - NP.updatedAtMs) / 1000;
-    const duration = Number(NP.duration || 0);
-    let elapsed = Number(NP.elapsed || 0) + dt;
-
-    if(duration > 0) elapsed = Math.min(elapsed, duration);
-    renderElapsed(elapsed, duration);
-  }
-
-  // tick rapide pour que le temps "défile"
-  setInterval(tickNowPlaying, 250);
-
-  // =========================
-  // Poll status (robuste)
-  // =========================
-  let _statusLoopHandle = null;
-  let _statusBusy = false;
-
-  async function getStatusUI(){
-    if(_statusBusy) return;
-    _statusBusy = true;
-    try{
-      const r = await apiFetch("/api/status", {}, true, 2500);
-      const t = await r.text();
-      if(!r.ok) return;
-      try{ updateNowPlayingUI(JSON.parse(t)); } catch {}
-    }catch{
-      // silencieux: on ne veut pas "geler" l'UI
-    }finally{
-      _statusBusy = false;
-    }
-  }
-
-  async function getStatusDebug(){
-    const out = $("out_status");
-    if(out) out.textContent = "…";
-    try{
-      const r = await apiFetch("/api/status", {}, true, 3500);
-      const t = await r.text();
-      if(out) out.textContent = `${r.status} ${r.statusText}\n\n${pretty(t)}`;
-      if(!r.ok) return;
-      try{ updateNowPlayingUI(JSON.parse(t)); } catch {}
-    }catch(e){
-      if(out) out.textContent = "Erreur: " + (e?.name === "AbortError" ? "timeout" : e);
-    }
-  }
-
-  function startStatusLoop(){
-    stopStatusLoop();
-
-    const loop = async ()=>{
-      await getStatusUI();
-      _statusLoopHandle = setTimeout(loop, 1000);
+    // --- NAVIGATION ---
+    window.switchTab = (t) => { 
+        document.querySelectorAll(".tab-content,.tab-btn").forEach(e=>e.classList.remove("active")); 
+        const btn = document.querySelector(`button[onclick="switchTab('${t}')"]`);
+        if(btn) btn.classList.add("active");
+        $(`tab-${t}`).classList.add("active");
+        if(t==='biblio' && !$("biblio_list").innerHTML) loadArtists(); 
+        if(t==='playlists') loadPlaylists(); 
+        if(t==='queue') refreshQueue(); 
+        if(t==='parametres') loadAudioOutputs(); 
     };
 
-    loop();
-  }
+    // --- BARRE D'OUTILS INTELLIGENTE ---
+    function renderToolbar() {
+        const count = window.selectedPaths.size;
+        const ctx = $("biblio_context_hidden")?.innerText || "";
+        
+        // Est-on dans une vue "profonde" (Détail) ?
+        const isDetail = ['detail_album', 'detail_artist', 'detail_genre', 'folders'].includes(currentView);
+        const showContextBar = (ctx || navHistory.length > 0 || isDetail);
 
-  function stopStatusLoop(){
-    if(_statusLoopHandle){
-      clearTimeout(_statusLoopHandle);
-      _statusLoopHandle = null;
-    }
-  }
+        // 1. Barre du haut (Boutons principaux)
+        // Si la barre contextuelle est affichée en dessous, on enlève l'arrondi du bas
+        let html = `
+        <div class="toolbar-unified" style="margin-bottom:0; border-bottom:none; ${showContextBar ? 'border-radius: 6px 6px 0 0;' : 'border-radius: 6px;'}">
+            <div class="toolbar-section" style="display:flex; gap:5px; align-items:center; overflow-x:auto;">
+                <button onclick="navHistory=[]; loadArtists()" class="${currentView==='artists'?'primary':''}">🎤 Artistes</button>
+                <button onclick="navHistory=[]; loadGlobalAlbums()" class="${currentView==='albums'?'primary':''}">💿 Albums</button>
+                <button onclick="navHistory=[]; loadGenres()" class="${currentView==='genres'?'primary':''}">🎸 Genres</button>
+                <button onclick="navHistory=[]; loadFolders('')" class="${currentView==='folders'?'primary':''}">📁 Dossiers</button>
+            </div>
+            <div class="toolbar-sep"></div>
+            <div class="toolbar-section">
+                <button onclick="toggleAllVisible()">✅</button>
+                <button onclick="addSelectionToQueue()" ${count===0?'disabled':''} class="primary">Queue ${count>0?`(${count})`:''}</button>
+                <button onclick="addSelectionToPlaylist()" ${count===0?'disabled':''} class="primary">List</button>
+            </div>
+        </div>`;
 
-  document.addEventListener("visibilitychange", ()=>{
-    if(document.hidden) stopStatusLoop();
-    else{
-      startStatusLoop();
-      getStatusUI();
-    }
-  });
+        // 2. Barre contextuelle (Gris Foncé) avec le bouton RETOUR
+        if (showContextBar) {
+            html += `
+            <div class="toolbar-unified" style="margin-top:0; background:#e2e6ea; border-top:1px solid #d6d8db; border-radius: 0 0 6px 6px; align-items:center;">
+                <button onclick="goBack()" class="primary" style="margin-right:10px; padding:4px 12px; font-size:0.9em;">⬅ Retour</button>
+                <div style="font-weight:bold; color:#333; font-size:1.1em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+                    ${ctx}
+                </div>
+            </div>`;
+        }
 
-  // expose pour bouton "↻"
-  window.refreshAll = refreshAll;
-
-  // =========================
-  // Queue
-  // =========================
-  async function getQueue(){
-    await getText("/api/queue", "out_queue");
-  }
-  window.getQueue = getQueue;
-
-  // =========================
-  // Browse + Add
-  // =========================
-  let CURRENT_PATH = "";
-
-  function browseGo(p){
-    CURRENT_PATH = (p || "").trim();
-    if($("browse_path")) $("browse_path").value = CURRENT_PATH;
-    browseReload();
-  }
-
-  function browseUp(){
-    const p = (CURRENT_PATH || "").trim();
-    if(!p){ browseGo(""); return; }
-    const parts = p.split("/").filter(Boolean);
-    parts.pop();
-    browseGo(parts.join("/"));
-  }
-
-  async function browseReload(){
-    const out  = $("out_browse");
-    const list = $("browse_list");
-    if(out) out.textContent = "…";
-    if(list) list.innerHTML = "";
-
-    const qs = new URLSearchParams();
-    if(CURRENT_PATH) qs.set("path", CURRENT_PATH);
-
-    try{
-      const r = await apiFetch("/api/browse?" + qs.toString(), {}, true, 3500);
-      const t = await r.text();
-      if(out) out.textContent = `${r.status} ${r.statusText}\n\n${pretty(t)}`;
-
-      if(!r.ok) return;
-      let data = {};
-      try{ data = JSON.parse(t); } catch { return; }
-      renderBrowse(data.items || []);
-    }catch(e){
-      if(out) out.textContent = "Erreur: " + (e?.name === "AbortError" ? "timeout" : e);
-    }
-  }
-
-  function renderBrowse(items){
-    const list = $("browse_list");
-    if(!list) return;
-
-    if(!items.length){
-      list.innerHTML = `<div class="rowitem"><div class="grow"><b>(vide)</b></div></div>`;
-      return;
+        return html;
     }
 
-    items.sort((a,b)=>{
-      const ta = a.type === "dir" ? 0 : 1;
-      const tb = b.type === "dir" ? 0 : 1;
-      if(ta !== tb) return ta - tb;
-      return (a.path || "").localeCompare(b.path || "");
-    });
+    function updateToolbar() { $("biblio_header").innerHTML = renderToolbar(); }
 
-    for(const it of items){
-      const type = it.type || "";
-      const path = it.path || "";
+    window.goBack = () => {
+        // 1. Si on a de l'historique, on l'utilise
+        if (navHistory.length > 0) {
+            const previous = navHistory.pop();
+            currentView = previous.view;
+            $("biblio_context_hidden").innerText = previous.title;
+            // Restauration simple
+            if (previous.view === 'artists') loadArtists(false, true);
+            else if (previous.view === 'albums') loadGlobalAlbums(false, true);
+            else if (previous.view === 'genres') loadGenres(true);
+            else loadArtists(false, true);
+            return;
+        }
 
-      const row = document.createElement("div");
-      row.className = "rowitem";
+        // 2. Si pas d'historique (ex: après refresh F5), on remonte logiquement
+        if (currentView === 'detail_album') {
+            // Depuis un album, on remonte aux Artistes (choix le plus sûr)
+            loadArtists(); 
+        } else if (currentView === 'detail_artist') {
+            loadArtists();
+        } else if (currentView === 'detail_genre') {
+            loadGenres();
+        } else if (currentView === 'folders') {
+            // Dossier parent géré par loadFolders lui-même, ici retour racine
+            loadArtists();
+        } else {
+            // Par défaut
+            loadArtists();
+        }
+    };
 
-      const icon = document.createElement("div");
-      icon.className = "icon";
-      icon.textContent = (type === "dir") ? "📁" : "🎵";
-
-      const main = document.createElement("div");
-      main.className = "grow";
-
-      const top = document.createElement("div");
-      top.className = "mono";
-      top.textContent = path;
-
-      const meta = document.createElement("div");
-      meta.className = "tag";
-      meta.textContent = (type === "dir") ? "dossier" : "fichier";
-
-      main.appendChild(top);
-      main.appendChild(meta);
-
-      const actions = document.createElement("div");
-      actions.className = "btns";
-
-      if(type === "dir"){
-        const b = document.createElement("button");
-        b.textContent = "Ouvrir";
-        b.onclick = ()=> browseGo(path);
-        actions.appendChild(b);
-      }else{
-        const add = document.createElement("button");
-        add.textContent = "Ajouter";
-        add.onclick = ()=> addToQueue(path, false);
-
-        const play = document.createElement("button");
-        play.className = "primary";
-        play.textContent = "Ajouter & jouer";
-        play.onclick = ()=> addToQueue(path, true);
-
-        actions.appendChild(add);
-        actions.appendChild(play);
-      }
-
-      row.appendChild(icon);
-      row.appendChild(main);
-      row.appendChild(actions);
-      list.appendChild(row);
+    // --- HELPERS LISTES ---
+    function renderGrid(data, append, renderFn) {
+        const list = $("biblio_list");
+        if(!append) list.className = "list grid-list";
+        if(data?.ok && data.items.length) {
+            list.insertAdjacentHTML('beforeend', data.items.map(renderFn).join(""));
+            setSentinel(data.items.length < 50 ? 'empty' : 'loading');
+        } else { setSentinel('empty'); }
+        isLoading = false;
     }
-  }
+    function renderList(data, append, renderFn) {
+        const list = $("biblio_list");
+        if(!append) list.className = "list";
+        if(data?.ok && data.items.length) {
+            list.insertAdjacentHTML('beforeend', data.items.map(renderFn).join(""));
+            setSentinel(data.items.length < 50 ? 'empty' : 'loading');
+        } else { setSentinel('empty'); }
+        isLoading = false;
+    }
 
-  async function addToQueue(uri, forcePlay){
-    const autoPlay = $("autoPlay")?.checked;
-    const play = !!(forcePlay || autoPlay);
-    await postJson("/api/queue/add", {uri, play}, "out_queue", () => refreshAll());
-  }
+    // --- VUES ---
+    function setupView(view, skipClear=false) {
+        if(!skipClear) {
+            currentPage = 1; $("biblio_list").innerHTML = ""; window.scrollTo(0,0); $("biblio_context_hidden").innerText = ""; 
+        }
+        updateToolbar();
+        setupScroll();
+    }
 
-  window.browseGo = browseGo;
-  window.browseUp = browseUp;
-  window.browseReload = browseReload;
+    window.loadArtists = async (append=false, isRestoring=false) => {
+        if(!append && !isRestoring) { navHistory = []; setupView('artists'); }
+        if(isRestoring) { setupView('artists', true); }
+        const d = await apiFetch(`/api/content/browse/artists?page=${currentPage}&limit=50`);
+        renderGrid(d, append, i => `<div class="grid-item" onclick="openArtist('${esc(i.artist)}')"><img class="grid-img" src="/api/content/artist_image?name=${encodeURIComponent(i.artist)}" onerror="this.src='assets/img/no_cover.png'"><div><b>${i.artist}</b></div></div>`);
+    };
 
-  // =========================
-  // Refresh global (bouton ↻)
-  // =========================
-  function refreshAll(){
-    getStatusDebug();
-    getQueue();
-    browseReload();
-  }
+    window.openArtist = async (artist) => {
+        navHistory.push({view: 'artists', title: 'Artistes'}); 
+        currentView = 'detail_artist';
+        $("biblio_context_hidden").innerText = artist;
+        updateToolbar();
+        $("biblio_list").innerHTML = ""; window.scrollTo(0,0);
+        const d = await apiFetch(`/api/content/browse/albums?artist=${encodeURIComponent(artist)}`);
+        renderGrid(d, false, i => `<div class="grid-item" onclick="openAlbum('${esc(i.album)}')"><img class="grid-img" src="/api/content/cover?path=${encodeURIComponent(i.path)}&album=${encodeURIComponent(i.album)}" onerror="this.src='assets/img/no_cover.png'"><div><b>${i.album}</b></div></div>`);
+    };
 
-  // =========================
-  // Init
-  // =========================
-  function init(){
-    // remplit le champ API key depuis localStorage
-    if($("apiKey")) $("apiKey").value = localStorage.getItem(KEY_LS) || "";
+    window.openAlbum = async (album) => {
+        // On sauvegarde d'où on vient
+        navHistory.push({view: currentView, title: $("biblio_context_hidden").innerText || "Retour"});
+        currentView = 'detail_album';
+        $("biblio_context_hidden").innerText = album;
+        updateToolbar();
+        $("biblio_list").innerHTML = ""; window.scrollTo(0,0);
+        const d = await apiFetch(`/api/content/browse/tracks?album=${encodeURIComponent(album)}`);
+        renderList(d, false, renderTrackRow);
+    };
 
-    // init browse + status
-    browseGo("");
-    getStatusUI();
-    startStatusLoop();
-  }
+    window.loadGlobalAlbums = async (append=false) => {
+        if(!append) { navHistory=[]; setupView('albums'); }
+        const d = await apiFetch(`/api/content/browse/albums_global?page=${currentPage}&limit=50`);
+        renderGrid(d, append, i => `<div class="grid-item" onclick="openAlbum('${esc(i.album)}')"><img class="grid-img" src="/api/content/cover?path=${encodeURIComponent(i.path)}&album=${encodeURIComponent(i.album)}" onerror="this.src='assets/img/no_cover.png'"><div><b>${i.album}</b></div><small>${i.artist}</small></div>`);
+    };
+    
+    window.loadGenres = async () => { navHistory=[]; setupView('genres'); const d=await apiFetch("/api/content/browse/genres"); renderList(d,false,i=>`<div class="rowitem" onclick="openGenre('${esc(i.genre)}')"><div class="grow"><b>${i.genre}</b></div><div class="tag">${i.count}</div></div>`); };
+    window.openGenre = async (g) => { navHistory.push({view:'genres', title:'Genres'}); currentView='detail_genre'; $("biblio_context_hidden").innerText=g; updateToolbar(); $("biblio_list").innerHTML=""; const d=await apiFetch(`/api/content/browse/albums?genre=${encodeURIComponent(g)}`); renderGrid(d,false,i=>`<div class="grid-item" onclick="openAlbum('${esc(i.album)}')"><img class="grid-img" src="/api/content/cover?path=${encodeURIComponent(i.path)}&album=${encodeURIComponent(i.album)}" onerror="this.src='assets/img/no_cover.png'"><div><b>${i.album}</b></div></div>`); };
 
-  if(document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
-  else init();
+    window.loadFolders = async (path) => {
+        if(!path) { navHistory=[]; setupView('folders'); }
+        $("biblio_context_hidden").innerText = path ? `/${path}` : "/"; updateToolbar();
+        const d = await apiFetch(`/api/content/browse/folders?path=${encodeURIComponent(path)}`);
+        let html = path ? `<div class="rowitem" onclick="loadFolders('${d.parent||''}')" style="background:#eee;cursor:pointer"><b>⬅ Dossier Parent</b></div>` : "";
+        if(d?.ok) {
+            html += d.items.map(i => {
+                const isDir = i.type==='folder';
+                return `<div class="rowitem"><input type="checkbox" data-path="${esc(i.path)}" onchange="toggleSelection('${esc(i.path)}', this)"><div class="grow" onclick="${isDir?`loadFolders('${esc(i.path)}')`:''}" style="cursor:pointer">${isDir?'📁':'🎵'} ${i.name}</div>${!isDir?`<button onclick="playNowPath('${esc(i.path)}')" class="primary">▶</button>`:''}</div>`;
+            }).join("");
+            $("biblio_list").innerHTML = html; setSentinel('empty');
+        }
+    };
+
+    // --- BLUETOOTH ---
+    window.scanBluetooth = async () => {
+        $("bt_list").innerHTML = "📡 Scan en cours...";
+        const paired = await apiFetch("/api/bluetooth/paired");
+        const scan = await apiFetch("/api/bluetooth/scan", "POST");
+        let h = "";
+        const known = paired?.ok ? paired.devices : [];
+        if(known.length) h += "<b>Déjà mémorisés</b>" + known.map(d=>`<div class="rowitem"><div class="grow">${d.name} <small>${d.mac}</small></div>${d.connected?'<span style="color:green;font-weight:bold">Connecté</span>':''}<button onclick="disconnectBT('${d.mac}')">Oublier</button>${!d.connected?`<button onclick="connectBT('${d.mac}')" class="primary">Connecter</button>`:''}</div>`).join("");
+        h += "<br><b>Appareils détectés</b>";
+        if(scan?.ok) {
+             const knownMacs = known.map(d=>d.mac);
+             h += scan.devices.filter(d=>!knownMacs.includes(d.mac)).map(d=>`<div class="rowitem"><div class="grow">${d.name} <small>${d.mac}</small></div><button onclick="connectBT('${d.mac}')" class="primary">Jumeler</button></div>`).join("");
+        }
+        $("bt_list").innerHTML = h || "Rien trouvé.";
+    };
+    
+    window.connectBT = async (mac) => { 
+        $("progress_text").innerText = "Connexion Bluetooth en cours (20s max)...";
+        $("progress_fill").style.width = "100%";
+        $("progress_count").innerText = "";
+        $("progress_modal").style.display = "flex";
+        const r = await apiFetch("/api/bluetooth/connect", "POST", {mac});
+        $("progress_modal").style.display = "none";
+        if(r?.ok) alert("✅ Connecté ! Pensez à activer la sortie 'Bluetooth' dans la liste Audio.");
+        else alert("❌ Echec: " + (r?.error || "Inconnu"));
+        window.scanBluetooth(); 
+    };
+    window.disconnectBT = async (mac) => { await apiFetch("/api/bluetooth/disconnect", "POST", {mac}); window.scanBluetooth(); };
+
+    // --- AUDIO & CONFIG ---
+    window.loadAudioOutputs = async () => { 
+        const d = await apiFetch("/api/audio/status");
+        const div = $("audio_outputs_list");
+        if(!div) return;
+        if(d?.ok) {
+            div.innerHTML = d.outputs.map(o => `
+            <div class="rowitem" style="flex-wrap:wrap">
+                <div class="grow"><b>${o.name}</b> <small>(ID: ${o.id})</small></div>
+                <button onclick="openDacConfig(${o.id}, '${esc(o.name)}')" style="margin-right:10px; padding:5px 10px;">⚙️ Config</button>
+                <label class="switch">
+                    <input type="checkbox" ${o.enabled?'checked':''} onchange="toggleAudioOutput(${o.id}, this.checked)">
+                    <span class="slider" style="font-weight:bold; color:${o.enabled?'green':'#ccc'}">${o.enabled?'ON':'OFF'}</span>
+                </label>
+            </div>`).join("");
+        } else { div.innerHTML = "Erreur chargement sorties."; }
+    };
+    window.openDacConfig = (id, name) => { $("cfg_id").value = id; $("config_title").innerText = `Sortie : ${name}`; $("cfg_mixer").value = "hardware"; $("config_modal").style.display = "flex"; };
+    window.saveDacConfig = async () => { const id = $("cfg_id").value; const mixer = $("cfg_mixer").value; $("config_modal").style.display = "none"; const r = await apiFetch("/api/audio/configure", "POST", {id: parseInt(id), mixer: mixer}); alert(r?.ok ? "Sauvegardé !" : "Erreur"); };
+    window.toggleAudioOutput = async (id, en) => { await apiFetch("/api/audio/outputs/toggle", "POST", {id, enabled:en}); setTimeout(loadAudioOutputs, 600); };
+
+    // --- PLAYER & UTILS ---
+    function formatTime(s) { if(isNaN(s)) return "0:00"; return `${Math.floor(s/60)}:${Math.floor(s%60).toString().padStart(2,'0')}`; }
+    function startTimer() { if(timerInterval) clearInterval(timerInterval); timerInterval = setInterval(()=> { if(isPlaying && currentElapsed < currentDuration && !window.isDragging) { currentElapsed++; updateTimeUI(); } }, 1000); }
+    function updateTimeUI() { $("time_elapsed").innerText = formatTime(currentElapsed); $("time_total").innerText = formatTime(currentDuration); $("seek_bar").max = currentDuration; $("seek_bar").value = currentElapsed; }
+    window.seekTrack = async (s) => { window.isDragging = false; currentElapsed = parseInt(s); updateTimeUI(); await apiFetch("/api/player/seek", "POST", {seconds: currentElapsed}); refreshStatus(); };
+    async function refreshStatus() { const d = await apiFetch("/api/status"); if(d?.ok) { const c=d.current||{}, s=d.status||{}; $("np_title").innerText=c.title||"-"; $("np_artist").innerText=c.artist||"-"; $("np_album").innerText=c.album||""; isPlaying = (s.state === "play"); if(s.time && s.time.includes(":")){ const p = s.time.split(':'); if(!window.isDragging) { currentElapsed = parseInt(p[0]); currentDuration = parseInt(p[1]); updateTimeUI(); } } else if(s.state === "stop") { currentElapsed=0; currentDuration=0; updateTimeUI(); } if(c.file && $("np_cover").dataset.last !== c.file) { $("np_cover").src=`/api/content/cover?path=${encodeURIComponent(c.file)}&t=${Date.now()}`; $("np_cover").dataset.last=c.file; } } }
+    function renderTrackRow(t) { return `<div class="rowitem"><input type="checkbox" data-path="${esc(t.path)}" onchange="toggleSelection('${esc(t.path)}', this)"><div class="grow"><b>${t.title}</b><br><small>${t.artist}</small></div><button onclick="playNowPath('${esc(t.path)}')" class="primary">▶</button><button onclick="addToQueuePath('${esc(t.path)}', this)">+</button></div>`; }
+    function esc(s) { return s.replace(/'/g, "\\'"); }
+    function setSentinel(s) { $("scroll_sentinel").style.display = (s==='loading')?'block':'none'; }
+    function setupScroll() { if(observer) observer.disconnect(); observer=new IntersectionObserver(e=>{if(e[0].isIntersecting && !isLoading && !['detail_album','detail_artist','folders','genres'].includes(currentView)) loadMore();}); observer.observe($("scroll_sentinel")); }
+    window.loadMore = () => { currentPage++; if(currentView==='artists') loadArtists(true); else if(currentView==='albums') loadGlobalAlbums(true); };
+
+    window.toggleSelection = (p, el) => { if(el.checked) window.selectedPaths.add(p); else window.selectedPaths.delete(p); updateToolbar(); };
+    window.apiAction = async (a) => { await apiFetch(`/api/player/${a}`, "POST"); refreshStatus(); };
+    window.setVolume = (v) => apiFetch(`/api/volume/${v}`, "POST");
+    window.playNowPath = async (p) => { await apiFetch("/api/queue/play_now", "POST", {path:decodeURIComponent(p)}); switchTab('lecteur'); };
+    window.addToQueuePath = async (p, b) => { await apiFetch("/api/queue/add", "POST", {path:decodeURIComponent(p)}); if(b){b.innerText="OK"; setTimeout(()=>b.innerText="+",1000);} };
+    window.refreshQueue = async () => { const d=await apiFetch("/api/queue"); $("queue_list").innerHTML=(d?.ok)?d.queue.map((s,i)=>`<div class="rowitem"><b>${i+1}</b> <div class="grow">${s.title||s.file}</div></div>`).join(""):""; };
+    window.saveCurrentPlaylist = () => { const n=prompt("Nom?"); if(n) apiFetch("/api/content/playlist/save", "POST", {name:n}); };
+    window.clearQueue = () => { if(confirm("Vider?")) apiFetch("/api/queue/clear", "POST").then(refreshQueue); };
+    window.loadPlaylists = async () => { const d=await apiFetch("/api/content/playlists"); $("playlist_list").innerHTML=d?.ok?d.playlists.map(p=>`<div class="rowitem"><div class="grow">${p.playlist}</div><button onclick="apiFetch('/api/content/playlist/load','POST',{name:'${p.playlist}',clear:true}).then(()=>switchTab('lecteur'))">▶</button></div>`).join(""):""; };
+    window.addSelectionToPlaylist = async () => { const p=Array.from(window.selectedPaths); if(p.length && confirm(`Ajouter ${p.length} pistes ?`)) { const d=await apiFetch("/api/content/playlists"); const n=prompt("Nom de la playlist ?\n" + (d?.playlists||[]).map(x=>x.playlist).join(", ")); if(n) await apiFetch("/api/content/playlist/add_items", "POST", {playlist:n, paths:p}); window.selectedPaths.clear(); updateToolbar(); }};
+    window.addSelectionToQueue = async () => { const p=Array.from(window.selectedPaths); if(p.length && confirm(`Ajouter ${p.length}?`)) { for(let x of p) await apiFetch("/api/queue/add", "POST", {path:x}); window.selectedPaths.clear(); updateToolbar(); refreshQueue(); } };
+    window.taskAction = async (t) => { await apiFetch({'albums':'/api/content/tasks/albums','artists':'/api/content/tasks/artists','mpd_update':'/api/content/tasks/mpd_update'}[t], "POST"); alert("Tâche lancée en arrière-plan"); };
+    window.saveApiKey = () => { localStorage.setItem(KEY_LS, $("apiKey").value); alert("Sauvegardé"); };
+    window.toggleAllVisible = () => { const bs=document.querySelectorAll('#biblio_list input[type="checkbox"]'); const all=Array.from(bs).every(c=>c.checked); bs.forEach(c=>{c.checked=!all; if(!all) window.selectedPaths.add(c.dataset.path); else window.selectedPaths.delete(c.dataset.path);}); updateToolbar(); };
+    window.closeModal = () => { $("progress_modal").style.display="none"; };
+
+    document.addEventListener("DOMContentLoaded", () => { const k=localStorage.getItem(KEY_LS); if(k)$("apiKey").value=k; startTimer(); setInterval(refreshStatus, 1000); refreshStatus(); });
 })();

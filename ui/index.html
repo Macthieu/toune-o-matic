@@ -1,120 +1,131 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="fr">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>toune-o-matic</title>
-
-  <link rel="stylesheet" href="assets/css/app.css" />
-  <script defer src="assets/js/app.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Toune-o-Matic</title>
+    <link rel="stylesheet" href="assets/css/app.css">
 </head>
-
 <body>
-  <header>
-    <h1>toune-o-matic</h1>
-    <small class="tag">UI locale – contrôle MPD + Snapcast</small>
-  </header>
 
-  <div class="row">
-    <!-- Connexion / API -->
-    <section class="card">
-      <h2>Connexion</h2>
-      <div class="grid2">
-        <div>
-          <label class="tag" for="apiKey">Clé API</label>
-          <input id="apiKey" type="password" placeholder="(facultatif)" autocomplete="off" />
+    <div id="progress_modal" class="modal" style="display:none;">
+        <div class="modal-content">
+            <h3>Traitement en cours...</h3>
+            <p id="progress_text">Patientez...</p>
+            <div class="progress-bar-modal"><div id="progress_fill" style="width:0%; background:#0069d9; height:100%"></div></div>
+            <p id="progress_count"></p>
+            <button class="danger" onclick="closeModal()">Fermer</button>
         </div>
-        <div>
-          <label class="tag" for="browse_path">Chemin (browse)</label>
-          <input id="browse_path" class="mono" type="text" value="" placeholder="" />
+    </div>
+
+    <div id="config_modal" class="modal" style="display:none;">
+        <div class="modal-content" style="text-align:left; max-width:400px;">
+            <h3>⚙️ Configuration Audio</h3>
+            <p id="config_title" style="color:#666; margin-bottom:15px;"></p>
+            
+            <label style="display:block; margin-bottom:5px; font-weight:bold;">Type de Mixer (Volume)</label>
+            <select id="cfg_mixer" style="width:100%; padding:8px; margin-bottom:15px; border:1px solid #ccc; border-radius:4px;">
+                <option value="hardware">Hardware (DAC)</option>
+                <option value="software">Software (MPD)</option>
+                <option value="none">Aucun (100% / Bitperfect)</option>
+            </select>
+
+            <input type="hidden" id="cfg_id">
+            
+            <div style="text-align:right; margin-top:20px;">
+                <button onclick="document.getElementById('config_modal').style.display='none'">Annuler</button>
+                <button class="primary" onclick="saveDacConfig()">Sauvegarder</button>
+            </div>
         </div>
-      </div>
+    </div>
 
-      <div class="btns">
-        <button class="primary" onclick="saveKey(true)">Sauver</button>
-        <button class="ghost" onclick="clearKey()">Effacer</button>
-        <button onclick="refreshAll()">Rafraîchir</button>
-        <button onclick="getText('/api/health','out_health', false)">Health</button>
-      </div>
+    <div class="container">
+        <div class="header-status"><h1>🎵 Toune-o-Matic</h1></div>
 
-      <div class="btns">
-        <label class="pill">
-          <input id="autoPlay" type="checkbox" />
-          <span>Auto-play</span>
-        </label>
-
-        <span class="pill"><span id="dot_play" class="dot"></span> Lecture</span>
-        <span class="pill"><span id="dot_dac" class="dot"></span> DAC</span>
-        <span class="pill"><span id="dot_snap" class="dot"></span> Snapcast</span>
-      </div>
-
-      <pre id="out_health" class="mono" aria-label="Sortie health"></pre>
-      <pre id="out_status" class="mono" aria-label="Sortie status"></pre>
-    </section>
-
-    <!-- Lecture -->
-    <section class="card">
-      <h2>Lecture</h2>
-
-      <div class="btns">
-        <button onclick="cmd('toggle')">⏯︎ Toggle</button>
-        <button onclick="cmd('pause')">⏸︎ Pause</button>
-        <button onclick="cmd('resume')">▶︎ Play</button>
-        <button onclick="cmd('prev')">⏮︎ Préc</button>
-        <button onclick="cmd('next')">⏭︎ Suiv</button>
-        <button class="danger" onclick="cmd('stop')">⏹︎ Stop</button>
-      </div>
-
-      <div class="btns">
-        <button class="ghost" onclick="setMode('dac')">DAC</button>
-        <button class="ghost" onclick="setMode('snap')">Snap</button>
-        <button class="ghost" onclick="setMode('both')">Both</button>
-      </div>
-
-      <div style="margin-top:12px">
-        <div class="tag">Now playing</div>
-        <div id="np_title" style="font-size:18px;font-weight:700;margin:6px 0">—</div>
-        <div id="np_artist_album" class="tag">—</div>
-
-        <div class="kv" style="margin-top:10px">
-          <span class="pill">Écoulé: <span id="np_elapsed" class="mono">0:00</span></span>
-          <span class="pill">Durée: <span id="np_duration" class="mono">0:00</span></span>
-          <span class="pill">État: <span id="np_state" class="mono">—</span></span>
-          <span class="pill">Volume: <span id="np_volume" class="mono">—</span></span>
+        <div class="tabs">
+            <button class="tab-btn active" onclick="switchTab('lecteur')">Lecteur</button>
+            <button class="tab-btn" onclick="switchTab('biblio')">Bibliothèque</button>
+            <button class="tab-btn" onclick="switchTab('playlists')">Playlists</button>
+            <button class="tab-btn" onclick="switchTab('queue')">Queue</button>
+            <button class="tab-btn" onclick="switchTab('parametres')">Paramètres</button>
         </div>
 
-        <div class="bar" style="margin-top:10px">
-          <div id="np_prog" class="barfill" style="width:0%"></div>
+        <div id="tab-lecteur" class="tab-content active">
+            <div class="player-card">
+                <div class="cover-container">
+                    <img id="np_cover" src="assets/img/no_cover.png" onerror="this.src='assets/img/no_cover.png'">
+                </div>
+                <h2 id="np_title">---</h2>
+                <h3 id="np_artist">---</h3>
+                <p id="np_album" style="color:#666">---</p>
+                
+                <div class="timer-container" style="display:flex; align-items:center; gap:10px; margin:20px 0;">
+                    <span id="time_elapsed" style="min-width:45px; text-align:right;">0:00</span>
+                    <input type="range" id="seek_bar" min="0" max="100" value="0" step="1" 
+                           style="flex-grow:1; cursor:pointer;"
+                           onmousedown="window.isDragging=true" 
+                           ontouchstart="window.isDragging=true"
+                           onchange="window.seekTrack(this.value)"
+                           onmouseup="window.isDragging=false"
+                           ontouchend="window.isDragging=false">
+                    <span id="time_total" style="min-width:45px;">0:00</span>
+                </div>
+                
+                <div class="btns large-btns">
+                    <button onclick="apiAction('previous')">⏮</button>
+                    <button onclick="apiAction('toggle')" class="primary big-play">⏯</button>
+                    <button onclick="apiAction('next')">⏭</button>
+                </div>
+                <div class="volume-ctrl">
+                    <span>🔈</span>
+                    <input type="range" id="volume" min="0" max="100" onchange="setVolume(this.value)">
+                    <span>🔊</span>
+                </div>
+            </div>
         </div>
-      </div>
-    </section>
-  </div>
 
-  <div class="row">
-    <!-- Queue -->
-    <section class="card">
-      <h2>Queue</h2>
-      <div class="btns">
-        <button onclick="getQueue()">Rafraîchir</button>
-        <button onclick="queuePlay(0)">▶︎ Play #0</button>
-        <button class="danger" onclick="postJson('/api/queue/clear', {}, 'out_queue', () => getQueue())">Vider</button>
-      </div>
-      <pre id="out_queue" class="mono" aria-label="Sortie queue"></pre>
-    </section>
+        <div id="tab-biblio" class="tab-content">
+            <div id="biblio_header"></div> 
+            <div id="biblio_context_hidden" style="display:none;"></div>
+            <div id="biblio_list" class="list grid-list"></div>
+            <div id="scroll_sentinel" style="display:none; text-align:center; padding:20px;">Chargement...</div>
+        </div>
 
-    <!-- Browse -->
-    <section class="card">
-      <h2>Browse</h2>
-      <div class="btns">
-        <button onclick="browseGo('')">Racine</button>
-        <button onclick="browseUp()">⬆︎ Up</button>
-        <button onclick="browseGo(document.getElementById('browse_path').value)">Go</button>
-        <button onclick="browseReload()">Reload</button>
-      </div>
+        <div id="tab-playlists" class="tab-content">
+            <div class="btns" style="margin-bottom:15px;"><button onclick="saveCurrentPlaylist()" class="primary">💾 Sauvegarder Queue</button></div>
+            <div id="playlist_list" class="list"></div>
+        </div>
 
-      <div id="browse_list" class="list" aria-label="Liste browse"></div>
-      <pre id="out_browse" class="mono" aria-label="Sortie browse"></pre>
-    </section>
-  </div>
+        <div id="tab-queue" class="tab-content">
+            <div class="btns" style="margin-bottom:15px;">
+                <button onclick="clearQueue()" class="danger">Vider</button>
+                <button onclick="refreshQueue()">Rafraîchir</button>
+            </div>
+            <div id="queue_list" class="list"></div>
+        </div>
+
+        <div id="tab-parametres" class="tab-content">
+            <h3>🔊 Sorties Audio</h3>
+            <div id="audio_outputs_list" class="list">
+                <div style="padding:10px; color:#666;">Chargement...</div>
+            </div>
+            <hr>
+            
+            <h3>🔵 Bluetooth</h3>
+            <div class="btns"><button onclick="scanBluetooth()" class="primary" style="width:100%">🔎 Scanner & Jumeler (15s)</button></div>
+            <div id="bt_list" style="margin-top:10px; border:1px solid #ddd; padding:10px;">Cliquez sur Scanner...</div>
+            <hr>
+
+            <h3>📚 Maintenance</h3>
+            <div class="btns" style="display:flex; gap:10px;">
+                <button onclick="taskAction('albums')">⬇️ Pochettes</button>
+                <button onclick="taskAction('artists')">⬇️ Artistes</button>
+                <button onclick="taskAction('mpd_update')">🔄 Scan Fichiers</button>
+            </div>
+            <hr>
+            <label>Clé API:</label> <input type="password" id="apiKey" style="width:100px"> <button onclick="saveApiKey()">OK</button>
+        </div>
+    </div>
+    <script src="assets/js/app.js"></script>
 </body>
 </html>

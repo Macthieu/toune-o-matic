@@ -16,3 +16,9 @@ venv/
 
 # OS / editor
 .DS_Store
+testdisk.log
+photorec.ses
+photorec.se2
+tests/image.dd
+__pycache__/
+*.pyc
