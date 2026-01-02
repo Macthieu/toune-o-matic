@@ -22,3 +22,7 @@ photorec.se2
 tests/image.dd
 __pycache__/
 *.pyc
+data/*.db
+.DS_Store
+venv/
+*.swp
