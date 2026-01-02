@@ -108,4 +108,4 @@ It acts as the **central brain of a hi-fi stereo cabinet**, connecting analog ge
 
 ## 📄 License
 
-MIT – libre pour tous usages personnels ou professionnels.
+GNU GPLv3 – libre pour tous usages personnels ou professionnels.
