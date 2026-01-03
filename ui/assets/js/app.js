@@ -24,6 +24,43 @@
     function esc(s) { return s.replace(/'/g, "\\'"); }
     function formatTime(s) { if(isNaN(s)) return "0:00"; return `${Math.floor(s/60)}:${Math.floor(s%60).toString().padStart(2,'0')}`; }
 
+// --- GESTION CONFIGURATION ---
+
+// Charge les réglages au démarrage
+async function loadSettings() {
+    const d = await apiFetch('/api/settings/');
+    if(d && d.ok && d.config) {
+        const c = d.config;
+        
+        // Remplissage Audio
+        if($("conf_audio_device")) $("conf_audio_device").value = c.audio.output_device;
+        if($("conf_audio_mixer")) $("conf_audio_mixer").value = c.audio.mixer_type;
+        if($("conf_audio_dual")) $("conf_audio_dual").checked = c.audio.dual_audio;
+
+        // Remplissage Playback
+        if($("conf_pb_buffer")) $("conf_pb_buffer").value = c.playback.buffer_size;
+        if($("conf_pb_dsd")) $("conf_pb_dsd").value = c.playback.dsd_mode;
+
+        // Remplissage Système
+        if($("conf_sys_name")) $("conf_sys_name").value = c.system.player_name;
+    }
+}
+
+// Sauvegarde automatique quand on change une valeur
+window.saveSetting = async (section, key, value) => {
+    // Petit feedback visuel (optionnel)
+    console.log(`Saving ${section}.${key} = ${value}`);
+    
+    await apiFetch('/api/settings/update', 'POST', {
+        section: section,
+        key: key,
+        value: value
+    });
+};
+
+// Ajouter l'appel à loadSettings() dans l'initialisation à la fin du fichier
+// document.addEventListener("DOMContentLoaded", ... loadSettings(); ...);
+
     // =========================================
     // SECTION 2: NAVIGATION & TOOLBAR
     // =========================================

@@ -145,3 +145,25 @@ input[type=range] {accent-color: var(--accent);}
 
 /* ANIMATIONS */
 @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+
+/* INPUTS MATERIAL POUR PARAMÈTRES */
+.material-input {
+    width: 100%;
+    padding: 10px;
+    margin-top: 5px;
+    background: #121212;
+    border: 1px solid #333;
+    color: white;
+    border-radius: 4px;
+    font-size: 1rem;
+}
+.material-input:focus {
+    border-color: var(--accent);
+    outline: none;
+}
+/* Style pour les checkbox standard pour qu'elles soient un peu plus grosses */
+input[type="checkbox"] {
+    accent-color: var(--accent);
+    transform: scale(1.2);
+    cursor: pointer;
+}
