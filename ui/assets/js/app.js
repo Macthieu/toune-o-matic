@@ -38,39 +38,60 @@
         if(t==='parametres') loadAudioOutputs(); 
     };
 
+// Dans ui/assets/js/app.js - Remplacer la fonction renderToolbar()
+
     function renderToolbar() {
         const count = window.selectedPaths.size;
         const ctx = $("biblio_context_hidden")?.innerText || "";
         const isDetail = ['detail_album', 'detail_artist', 'detail_genre', 'folders'].includes(currentView);
-        const showContextBar = (ctx || navHistory.length > 0 || isDetail);
+        
+        // --- NOUVEAU : Barre de recherche ---
+        // On affiche la recherche seulement si on est en vue racine (Artistes/Albums)
+        const showSearch = !isDetail && (currentView === 'artists' || currentView === 'albums');
 
         let html = `
-        <div class="toolbar-unified" style="margin-bottom:0; border-bottom:none; ${showContextBar ? 'border-radius: 6px 6px 0 0;' : 'border-radius: 6px;'}">
-            <div class="toolbar-section" style="display:flex; gap:5px; align-items:center; overflow-x:auto;">
-                <button onclick="navHistory=[]; loadArtists()" class="${currentView==='artists'?'primary':''}">🎤 Artistes</button>
-                <button onclick="navHistory=[]; loadGlobalAlbums()" class="${currentView==='albums'?'primary':''}">💿 Albums</button>
-                <button onclick="navHistory=[]; loadGenres()" class="${currentView==='genres'?'primary':''}">🎸 Genres</button>
-                <button onclick="navHistory=[]; loadFolders('')" class="${currentView==='folders'?'primary':''}">📁 Dossiers</button>
+        <div class="toolbar-unified">
+            <div style="display:flex; gap:5px; flex-wrap:wrap;">
+                <button onclick="navHistory=[]; loadArtists()" class="${currentView==='artists'?'primary':''}">Artistes</button>
+                <button onclick="navHistory=[]; loadGlobalAlbums()" class="${currentView==='albums'?'primary':''}">Albums</button>
+                <button onclick="navHistory=[]; loadGenres()" class="${currentView==='genres'?'primary':''}">Genres</button>
+                <button onclick="navHistory=[]; loadFolders('')" class="${currentView==='folders'?'primary':''}">Dossiers</button>
             </div>
-            <div class="toolbar-sep"></div>
-            <div class="toolbar-section">
+            
+            ${showSearch ? `
+            <div class="search-box">
+                <i class="fas fa-search search-icon"></i>
+                <input type="text" id="lib_search" placeholder="Filtrer..." oninput="handleSearch(this.value)">
+            </div>` : ''}
+
+            <div style="flex-grow:1"></div>
+
+            <div style="display:flex; gap:5px;">
                 <button onclick="toggleAllVisible()">✅</button>
-                <button onclick="addSelectionToQueue()" ${count===0?'disabled':''} class="primary">Queue ${count>0?`(${count})`:''}</button>
-                <button onclick="addSelectionToPlaylist()" ${count===0?'disabled':''} class="primary">List</button>
+                <button onclick="addSelectionToQueue()" ${count===0?'disabled':''} class="primary">Ajouter (${count})</button>
             </div>
         </div>`;
 
-        if (showContextBar) {
+        // Barre de contexte (Bouton Retour)
+        if (ctx || navHistory.length > 0 || isDetail) {
             html += `
-            <div class="toolbar-unified" style="margin-top:0; background:#e2e6ea; border-top:1px solid #d6d8db; border-radius: 0 0 6px 6px; align-items:center;">
-                <button onclick="goBack()" class="primary" style="margin-right:10px; padding:4px 12px; font-size:0.9em;">⬅ Retour</button>
-                <div style="font-weight:bold; color:#333; font-size:1.1em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
-                    ${ctx}
-                </div>
+            <div class="toolbar-unified" style="margin-top:-10px; background:#2c2c2c; border-top:none;">
+                <button onclick="goBack()" class="primary">⬅ Retour</button>
+                <div style="font-weight:bold; margin-left:10px;">${ctx}</div>
             </div>`;
         }
         return html;
     }
+
+// Gestionnaire de recherche avec petit délai (pour ne pas spammer l'API)
+    let searchTimeout;
+    window.handleSearch = (val) => {
+        clearTimeout(searchTimeout);
+        searchTimeout = setTimeout(() => {
+            if(currentView === 'artists') { currentPage=1; loadArtists(false, false, val); }
+            // Vous pourrez ajouter la recherche d'albums ici plus tard
+        }, 300);
+    };
 
     function updateToolbar() { $("biblio_header").innerHTML = renderToolbar(); }
 
@@ -120,11 +141,19 @@
     }
 
     // --- Chargeurs ---
-    window.loadArtists = async (append=false, isRestoring=false) => {
+// Remplacer loadArtists par ceci :
+    window.loadArtists = async (append=false, isRestoring=false, query="") => {
         if(!append && !isRestoring) { navHistory = []; setupView('artists'); }
         if(isRestoring) { setupView('artists', true); }
-        const d = await apiFetch(`/api/content/browse/artists?page=${currentPage}&limit=50`);
+        
+        // On envoie le paramètre ?q=... à l'API
+        const url = `/api/content/browse/artists?page=${currentPage}&limit=50&q=${encodeURIComponent(query)}`;
+        const d = await apiFetch(url);
+        
         renderGrid(d, append, i => `<div class="grid-item" onclick="openArtist('${esc(i.artist)}')"><img class="grid-img" src="/api/content/artist_image?name=${encodeURIComponent(i.artist)}" onerror="this.src='assets/img/no_cover.png'"><div><b>${i.artist}</b></div></div>`);
+        
+        // Petit hack pour garder le focus dans le champ de recherche après rechargement
+        if(query && $("lib_search")) { $("lib_search").value = query; $("lib_search").focus(); }
     };
 
     window.openArtist = async (artist) => {
