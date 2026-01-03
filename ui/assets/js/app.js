@@ -228,6 +228,39 @@
     window.saveDacConfig = async () => { const id = $("cfg_id").value; const mixer = $("cfg_mixer").value; $("config_modal").style.display = "none"; const r = await apiFetch("/api/audio/configure", "POST", {id: parseInt(id), mixer: mixer}); alert(r?.ok ? "Sauvegardé !" : "Erreur"); };
     window.toggleAudioOutput = async (id, en) => { await apiFetch("/api/audio/outputs/toggle", "POST", {id, enabled:en}); setTimeout(loadAudioOutputs, 600); };
 
+window.refreshSystemStats = async () => {
+    // On ne rafraichit que si l'onglet Paramètres est actif
+    if(!document.getElementById('tab-parametres').classList.contains('active')) return;
+
+    const d = await apiFetch("/api/system/stats");
+    if(d) {
+        // Mise à jour textes
+        $("sys_cpu").innerText = d.cpu;
+        $("sys_ram").innerText = d.ram;
+        $("sys_ram_mb").innerText = d.ram_used_mb;
+        $("sys_temp").innerText = d.temp;
+        $("sys_disk").innerText = d.disk;
+        $("sys_disk_gb").innerText = d.disk_free_gb;
+
+        // Mise à jour barres avec couleurs dynamiques
+        updateBar("bar_cpu", d.cpu);
+        updateBar("bar_ram", d.ram);
+        updateBar("bar_disk", d.disk);
+        
+        // Couleur température
+        const t = d.temp;
+        const tElem = $("sys_temp").parentElement; // Le parent .gauge-value
+        tElem.style.color = (t > 75) ? "#dc3545" : (t > 60 ? "#ffc107" : "#28a745");
+    }
+};
+
+function updateBar(id, val) {
+    const el = $(id);
+    el.style.width = val + "%";
+    // Changement couleur (Vert -> Jaune -> Rouge)
+    el.className = "progress-fill " + (val > 80 ? "status-crit" : (val > 60 ? "status-warn" : "status-ok"));
+}
+
     // =========================================
     // SECTION 6: LECTEUR & STATUS (Modifié)
     // =========================================
@@ -302,4 +335,5 @@
 
     // --- INITIALISATION ---
     document.addEventListener("DOMContentLoaded", () => { const k=localStorage.getItem(KEY_LS); if(k)$("apiKey").value=k; startTimer(); setInterval(refreshStatus, 1000); refreshStatus(); });
+    setInterval(refreshSystemStats, 2000); // Rafraichissement système toutes les 2 sec
 })();

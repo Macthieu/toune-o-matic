@@ -124,6 +124,46 @@
         </div>
 
         <div id="tab-parametres" class="tab-content">
+            <div class="cockpit-grid">
+                <div class="cockpit-card">
+                    <h4>CPU</h4>
+                    <div class="gauge-value"><span id="sys_cpu">0</span>%</div>
+                    <div class="progress-track"><div id="bar_cpu" class="progress-fill"></div></div>
+                </div>
+                <div class="cockpit-card">
+                    <h4>RAM</h4>
+                    <div class="gauge-value"><span id="sys_ram">0</span>%</div>
+                    <div class="progress-track"><div id="bar_ram" class="progress-fill"></div></div>
+                    <small style="color:#999"><span id="sys_ram_mb">0</span> MB utilisés</small>
+                </div>
+                <div class="cockpit-card">
+                    <h4>Temp.</h4>
+                    <div class="gauge-value"><span id="sys_temp">0</span>°C</div>
+                </div>
+                <div class="cockpit-card">
+                    <h4>Disque</h4>
+                    <div class="gauge-value"><span id="sys_disk">0</span>%</div>
+                    <div class="progress-track"><div id="bar_disk" class="progress-fill"></div></div>
+                    <small style="color:#999"><span id="sys_disk_gb">0</span> GB Libres</small>
+                </div>
+            </div>
+            
+            <hr>
+
+            <div class="cockpit-integration" style="background:#f8f9fa; padding:15px; border-radius:8px; border:1px solid #ddd; margin-bottom:20px; text-align:center;">
+                <h3 style="margin-top:0;">🛠️ Administration Système</h3>
+                <p style="font-size:0.9em; color:#666; margin-bottom:10px;">
+                    Gérer le Wifi, formater les disques durs, logs système...
+                </p>
+                <a href="javascript:void(0)" onclick="window.open('http://' + window.location.hostname + ':9090', '_blank')" style="text-decoration:none;">
+                    <button class="primary" style="background:#d9534f; border-color:#d43f3a; width:100%;">
+                        <i class="fas fa-tools"></i> Ouvrir la Console Admin
+                    </button>
+                </a>
+            </div>
+
+            <hr>
+
             <h3>🔊 Sorties Audio</h3>
             <div id="audio_outputs_list" class="list">
                 <div style="padding:10px; color:#666;">Chargement...</div>
