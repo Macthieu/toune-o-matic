@@ -24,42 +24,37 @@
     function esc(s) { return s.replace(/'/g, "\\'"); }
     function formatTime(s) { if(isNaN(s)) return "0:00"; return `${Math.floor(s/60)}:${Math.floor(s%60).toString().padStart(2,'0')}`; }
 
-// --- GESTION CONFIGURATION ---
+    // --- GESTION CONFIGURATION (MISE À JOUR) ---
+    async function loadSettings() {
+        const d = await apiFetch('/api/settings/');
+        if(d && d.ok && d.config) {
+            const c = d.config;
+            
+            // --- AUDIO & VOLUME ---
+            if($("conf_audio_device")) $("conf_audio_device").value = c.audio.output_device;
+            if($("conf_audio_mixer")) $("conf_audio_mixer").value = c.audio.mixer_type;
+            if($("conf_audio_dual")) $("conf_audio_dual").checked = c.audio.dual_audio;
+            if($("conf_vol_startup")) $("conf_vol_startup").value = c.audio.vol_startup;
+            if($("conf_vol_max")) $("conf_vol_max").value = c.audio.vol_max;
+            if($("conf_vol_curve")) $("conf_vol_curve").value = c.audio.vol_curve;
 
-// Charge les réglages au démarrage
-async function loadSettings() {
-    const d = await apiFetch('/api/settings/');
-    if(d && d.ok && d.config) {
-        const c = d.config;
-        
-        // Remplissage Audio
-        if($("conf_audio_device")) $("conf_audio_device").value = c.audio.output_device;
-        if($("conf_audio_mixer")) $("conf_audio_mixer").value = c.audio.mixer_type;
-        if($("conf_audio_dual")) $("conf_audio_dual").checked = c.audio.dual_audio;
+            // --- PLAYBACK ---
+            if($("conf_pb_buffer")) $("conf_pb_buffer").value = c.playback.buffer_size;
+            if($("conf_pb_dsd")) $("conf_pb_dsd").value = c.playback.dsd_mode;
+            if($("conf_pb_prebuffer")) $("conf_pb_prebuffer").value = c.playback.buffer_before_play;
+            if($("conf_pb_norm")) $("conf_pb_norm").checked = c.playback.volume_normalization;
 
-        // Remplissage Playback
-        if($("conf_pb_buffer")) $("conf_pb_buffer").value = c.playback.buffer_size;
-        if($("conf_pb_dsd")) $("conf_pb_dsd").value = c.playback.dsd_mode;
-
-        // Remplissage Système
-        if($("conf_sys_name")) $("conf_sys_name").value = c.system.player_name;
+            // --- SYSTEM ---
+            if($("conf_sys_name")) $("conf_sys_name").value = c.system.player_name;
+            if($("conf_sys_sound")) $("conf_sys_sound").checked = c.system.startup_sound;
+        }
     }
-}
 
-// Sauvegarde automatique quand on change une valeur
-window.saveSetting = async (section, key, value) => {
-    // Petit feedback visuel (optionnel)
-    console.log(`Saving ${section}.${key} = ${value}`);
-    
-    await apiFetch('/api/settings/update', 'POST', {
-        section: section,
-        key: key,
-        value: value
-    });
-};
-
-// Ajouter l'appel à loadSettings() dans l'initialisation à la fin du fichier
-// document.addEventListener("DOMContentLoaded", ... loadSettings(); ...);
+    // Sauvegarde automatique
+    window.saveSetting = async (section, key, value) => {
+        console.log(`Saving ${section}.${key} = ${value}`);
+        await apiFetch('/api/settings/update', 'POST', { section: section, key: key, value: value });
+    };
 
     // =========================================
     // SECTION 2: NAVIGATION & TOOLBAR
@@ -72,18 +67,13 @@ window.saveSetting = async (section, key, value) => {
         if(t==='biblio' && !$("biblio_list").innerHTML) loadArtists(); 
         if(t==='playlists') loadPlaylists(); 
         if(t==='queue') refreshQueue(); 
-        if(t==='parametres') loadAudioOutputs(); 
+        if(t==='parametres') { loadAudioOutputs(); loadSettings(); } // Charge les réglages quand on ouvre l'onglet
     };
-
-// Dans ui/assets/js/app.js - Remplacer la fonction renderToolbar()
 
     function renderToolbar() {
         const count = window.selectedPaths.size;
         const ctx = $("biblio_context_hidden")?.innerText || "";
         const isDetail = ['detail_album', 'detail_artist', 'detail_genre', 'folders'].includes(currentView);
-        
-        // --- NOUVEAU : Barre de recherche ---
-        // On affiche la recherche seulement si on est en vue racine (Artistes/Albums)
         const showSearch = !isDetail && (currentView === 'artists' || currentView === 'albums');
 
         let html = `
@@ -109,7 +99,6 @@ window.saveSetting = async (section, key, value) => {
             </div>
         </div>`;
 
-        // Barre de contexte (Bouton Retour)
         if (ctx || navHistory.length > 0 || isDetail) {
             html += `
             <div class="toolbar-unified" style="margin-top:-10px; background:#2c2c2c; border-top:none;">
@@ -120,13 +109,11 @@ window.saveSetting = async (section, key, value) => {
         return html;
     }
 
-// Gestionnaire de recherche avec petit délai (pour ne pas spammer l'API)
     let searchTimeout;
     window.handleSearch = (val) => {
         clearTimeout(searchTimeout);
         searchTimeout = setTimeout(() => {
             if(currentView === 'artists') { currentPage=1; loadArtists(false, false, val); }
-            // Vous pourrez ajouter la recherche d'albums ici plus tard
         }, 300);
     };
 
@@ -148,7 +135,7 @@ window.saveSetting = async (section, key, value) => {
     };
 
     // =========================================
-    // SECTION 3: CHARGEMENT CONTENU (Bibliothèque)
+    // SECTION 3: CHARGEMENT CONTENU
     // =========================================
     function renderGrid(data, append, renderFn) {
         const list = $("biblio_list");
@@ -177,19 +164,12 @@ window.saveSetting = async (section, key, value) => {
         setupScroll();
     }
 
-    // --- Chargeurs ---
-// Remplacer loadArtists par ceci :
     window.loadArtists = async (append=false, isRestoring=false, query="") => {
         if(!append && !isRestoring) { navHistory = []; setupView('artists'); }
         if(isRestoring) { setupView('artists', true); }
-        
-        // On envoie le paramètre ?q=... à l'API
         const url = `/api/content/browse/artists?page=${currentPage}&limit=50&q=${encodeURIComponent(query)}`;
         const d = await apiFetch(url);
-        
         renderGrid(d, append, i => `<div class="grid-item" onclick="openArtist('${esc(i.artist)}')"><img class="grid-img" src="/api/content/artist_image?name=${encodeURIComponent(i.artist)}" onerror="this.src='assets/img/no_cover.png'"><div><b>${i.artist}</b></div></div>`);
-        
-        // Petit hack pour garder le focus dans le champ de recherche après rechargement
         if(query && $("lib_search")) { $("lib_search").value = query; $("lib_search").focus(); }
     };
 
@@ -276,70 +256,37 @@ window.saveSetting = async (section, key, value) => {
     // =========================================
     window.loadAudioOutputs = async () => { 
         const d = await apiFetch("/api/audio/status");
-        const div = $("audio_outputs_list");
-        if(!div) return;
-        if(d?.ok) {
-            div.innerHTML = d.outputs.map(o => `
-            <div class="rowitem" style="flex-wrap:wrap">
-                <div class="grow"><b>${o.name}</b> <small>(ID: ${o.id})</small></div>
-                <button onclick="openDacConfig(${o.id}, '${esc(o.name)}')" style="margin-right:10px; padding:5px 10px;">⚙️ Config</button>
-                <label class="switch">
-                    <input type="checkbox" ${o.enabled?'checked':''} onchange="toggleAudioOutput(${o.id}, this.checked)">
-                    <span class="slider" style="font-weight:bold; color:${o.enabled?'green':'#ccc'}">${o.enabled?'ON':'OFF'}</span>
-                </label>
-            </div>`).join("");
-        } else { div.innerHTML = "Erreur chargement sorties."; }
+        const div = $("audio_outputs_list"); // Si on remet cette liste un jour
+        // Dans la nouvelle interface Volumio, cette fonction sert juste de fallback ou pour le lecteur
     };
-    window.openDacConfig = (id, name) => { $("cfg_id").value = id; $("config_title").innerText = `Sortie : ${name}`; $("cfg_mixer").value = "hardware"; $("config_modal").style.display = "flex"; };
-    window.saveDacConfig = async () => { const id = $("cfg_id").value; const mixer = $("cfg_mixer").value; $("config_modal").style.display = "none"; const r = await apiFetch("/api/audio/configure", "POST", {id: parseInt(id), mixer: mixer}); alert(r?.ok ? "Sauvegardé !" : "Erreur"); };
-    window.toggleAudioOutput = async (id, en) => { await apiFetch("/api/audio/outputs/toggle", "POST", {id, enabled:en}); setTimeout(loadAudioOutputs, 600); };
+    // Note: window.toggleAudioOutput et autres sont gardés pour compatibilité
 
-window.refreshSystemStats = async () => {
-    // On ne rafraichit que si l'onglet Paramètres est actif
-    if(!document.getElementById('tab-parametres').classList.contains('active')) return;
-
-    const d = await apiFetch("/api/system/stats");
-    if(d) {
-        // Mise à jour textes
-        $("sys_cpu").innerText = d.cpu;
-        $("sys_ram").innerText = d.ram;
-        $("sys_ram_mb").innerText = d.ram_used_mb;
-        $("sys_temp").innerText = d.temp;
-        $("sys_disk").innerText = d.disk;
-        $("sys_disk_gb").innerText = d.disk_free_gb;
-
-        // Mise à jour barres avec couleurs dynamiques
-        updateBar("bar_cpu", d.cpu);
-        updateBar("bar_ram", d.ram);
-        updateBar("bar_disk", d.disk);
-        
-        // Couleur température
-        const t = d.temp;
-        const tElem = $("sys_temp").parentElement; // Le parent .gauge-value
-        tElem.style.color = (t > 75) ? "#dc3545" : (t > 60 ? "#ffc107" : "#28a745");
-    }
-};
-
-function updateBar(id, val) {
-    const el = $(id);
-    el.style.width = val + "%";
-    // Changement couleur (Vert -> Jaune -> Rouge)
-    el.className = "progress-fill " + (val > 80 ? "status-crit" : (val > 60 ? "status-warn" : "status-ok"));
-}
+    window.refreshSystemStats = async () => {
+        if(!document.getElementById('tab-parametres').classList.contains('active')) return;
+        const d = await apiFetch("/api/system/stats");
+        if(d) {
+            $("sys_cpu").innerText = d.cpu;
+            $("sys_ram").innerText = d.ram;
+            //$("sys_ram_mb").innerText = d.ram_used_mb; // Si affiché
+            $("sys_temp").innerText = d.temp;
+            // $("sys_disk").innerText = d.disk; // Plus affiché dans le nouveau design compact
+            
+            const t = d.temp;
+            const tElem = $("sys_temp").parentElement;
+            tElem.style.color = (t > 75) ? "#dc3545" : (t > 60) ? "#ffc107" : "#28a745";
+        }
+    };
 
     // =========================================
-    // SECTION 6: LECTEUR & STATUS (Modifié)
+    // SECTION 6: LECTEUR & STATUS
     // =========================================
     function startTimer() { if(timerInterval) clearInterval(timerInterval); timerInterval = setInterval(()=> { if(isPlaying && currentElapsed < currentDuration && !window.isDragging) { currentElapsed++; updateTimeUI(); } }, 1000); }
     function updateTimeUI() { $("time_elapsed").innerText = formatTime(currentElapsed); $("time_total").innerText = formatTime(currentDuration); $("seek_bar").max = currentDuration; $("seek_bar").value = currentElapsed; }
     
     window.seekTrack = async (s) => { window.isDragging = false; currentElapsed = parseInt(s); updateTimeUI(); await apiFetch("/api/player/seek", "POST", {seconds: currentElapsed}); refreshStatus(); };
-    
-    // --- NOUVEAU: Fonctions Shuffle/Repeat ---
     window.toggleShuffle = async () => { await apiFetch("/api/player/shuffle", "POST"); refreshStatus(); };
     window.toggleRepeat = async () => { await apiFetch("/api/player/repeat", "POST"); refreshStatus(); };
 
-    // --- REFRESH GLOBAL (Boucle principale) ---
     async function refreshStatus() { 
         const d = await apiFetch("/api/status"); 
         if(d?.ok) { 
@@ -349,33 +296,20 @@ function updateBar(id, val) {
             $("np_album").innerText=c.album||""; 
             isPlaying = (s.state === "play"); 
 
-            // Mise à jour Bouton Play/Pause
             const btnPlay = $("btn-play-pause");
             if(btnPlay) btnPlay.innerHTML = isPlaying ? '<i class="fas fa-pause"></i>' : '<i class="fas fa-play"></i>';
 
-            // Mise à jour Boutons Shuffle/Repeat (Illuminé si actif)
             const btnShuf = $("btn-shuffle");
             const btnRep = $("btn-repeat");
             if(btnShuf) btnShuf.classList.toggle("active", s.random == 1 || s.random === true);
             if(btnRep) btnRep.classList.toggle("active", s.repeat == 1 || s.repeat === true);
 
-            // Mise à jour Temps
             if(s.time && s.time.includes(":")){ 
                 const p = s.time.split(':'); 
-                if(!window.isDragging) { 
-                    currentElapsed = parseInt(p[0]); 
-                    currentDuration = parseInt(p[1]); 
-                    updateTimeUI(); 
-                } 
-            } else if(s.state === "stop") { 
-                currentElapsed=0; currentDuration=0; updateTimeUI(); 
-            } 
+                if(!window.isDragging) { currentElapsed = parseInt(p[0]); currentDuration = parseInt(p[1]); updateTimeUI(); } 
+            } else if(s.state === "stop") { currentElapsed=0; currentDuration=0; updateTimeUI(); } 
             
-            // Mise à jour Pochette
-            if(c.file && $("np_cover").dataset.last !== c.file) { 
-                $("np_cover").src=`/api/content/cover?path=${encodeURIComponent(c.file)}&t=${Date.now()}`; 
-                $("np_cover").dataset.last=c.file; 
-            } 
+            if(c.file && $("np_cover").dataset.last !== c.file) { $("np_cover").src=`/api/content/cover?path=${encodeURIComponent(c.file)}&t=${Date.now()}`; $("np_cover").dataset.last=c.file; } 
         } 
     }
 
@@ -400,6 +334,6 @@ function updateBar(id, val) {
     window.closeModal = () => { $("progress_modal").style.display="none"; };
 
     // --- INITIALISATION ---
-    document.addEventListener("DOMContentLoaded", () => { const k=localStorage.getItem(KEY_LS); if(k)$("apiKey").value=k; startTimer(); setInterval(refreshStatus, 1000); refreshStatus(); });
-    setInterval(refreshSystemStats, 2000); // Rafraichissement système toutes les 2 sec
+    document.addEventListener("DOMContentLoaded", () => { const k=localStorage.getItem(KEY_LS); if(k)$("apiKey").value=k; startTimer(); setInterval(refreshStatus, 1000); refreshStatus(); loadSettings(); });
+    setInterval(refreshSystemStats, 2000); 
 })();
